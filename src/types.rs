@@ -14,6 +14,7 @@ pub enum Type {
     F32,
     F64,
     String,
+    NoneType,
     Function(Vec<Type>, Box<Type>),
     Array(Box<Type>),
     UserType(String),
@@ -35,6 +36,7 @@ impl Display for Type {
             Type::F32 => "f32".to_string(),
             Type::F64 => "f64".to_string(),
             Type::String => "string".to_string(),
+            Type::NoneType => "none".to_string(),
             Type::Function(params, ret) => format!(
                 "function ({}) -> {}",
                 params
@@ -69,6 +71,7 @@ impl FromStr for Type {
             "f32" => Ok(Type::F32),
             "f64" => Ok(Type::F64),
             "string" => Ok(Type::String),
+            "none" => Ok(Type::NoneType),
             _ => Err(()),
         }
     }

@@ -2,6 +2,7 @@
 use crate::block::Block;
 use crate::expression::Expression;
 use crate::variable::Variable;
+use crate::types::Type;
 
 use std::fmt::Display;
 
@@ -26,11 +27,15 @@ pub enum Statement {
     },
     Function {
         name: String,
+        ret_type: Type,
         params: Vec<Variable>,
         body: Block,
     },
     Block {
         body: Block,
+    },
+    Return {
+        value: Expression,
     },
 }
 
@@ -61,9 +66,10 @@ impl Display for Statement {
                 "If(condition: {}, then: {}, else: {:?})",
                 condition, then_block, else_block
             ),
-            Statement::Function { name, params, body } => format!(
-                "Function(name: {}, params: [{}], body: {})",
+            Statement::Function { name, ret_type, params, body } => format!(
+                "Function(name: {}, ret_type: {}, params: [{}], body: {})",
                 name,
+                ret_type,
                 params.iter()
                     .map(|p| p.name.clone())
                     .collect::<Vec<_>>()
@@ -71,6 +77,7 @@ impl Display for Statement {
                 body
             ),
             Statement::Block { body } => format!("Block({})", body),
+            Statement::Return { value } => format!("Return({})", value),
         };
         write!(f, "{}", fmtstr)
     }

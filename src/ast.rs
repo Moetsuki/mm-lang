@@ -230,10 +230,29 @@ impl Ast {
                         }
                     }
                     self.expect(&Token::Punctuation(")".to_string()));
+
+                    let mut ret_type: Type;
+                    if let Some(arrow_token) = self.peek_token() {
+                        if arrow_token.token == Token::Punctuation("->".to_string()) {
+                            self.next_token(); // consume '->'
+                            ret_type = self.parse_type();
+                        } else {
+                            ret_type = Type::NoneType;
+                        }
+                        } else {
+                        ret_type = Type::NoneType;
+                    }
                     self.expect(&Token::Punctuation("{".to_string()));
                     let body = self.parse();
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-                    statements.push(Statement::Function { name, params, body });
+                    statements.push(Statement::Function { name, ret_type, params, body });
+                }
+                Token::Keyword(keyword) if keyword == "return" => {
+                    //
+                    // Handle return statements
+                    //
+                    let expr = self.parse_expr();
+                    statements.push(Statement::Return { value: expr });
                 }
                 Token::Newline => {
                     //

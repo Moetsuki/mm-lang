@@ -74,21 +74,8 @@ fn print_block(block: &block::Block, level: usize) {
 
 fn main() {
     let source = r#"
-    x: i32 = 5; y: u32 = 10;
-    z: i64 = x + y // This is a comment
-    bar : u8 = 2;
-    if z > 15 {
-        print("yes + no"); //Another comment
-    } else {
-        if bar<=5 {
-            print("small");
-        } else {
-            print("big");
-        }
-    }
-
-    function foo(text: string) {
-        print(text);
+    function baz(x: i32, y: u32) -> i64 {
+        return x + y;
     }
     "#;
     process(source);

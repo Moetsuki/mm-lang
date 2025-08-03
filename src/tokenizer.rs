@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-pub const PUNCTUATION: [&str; 10] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":"];
+pub const PUNCTUATION: [&str; 11] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->"];
 
 pub const OPERATORS: [&str; 12] = [
     "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=",
