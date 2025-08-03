@@ -86,3 +86,60 @@ fn test_assignment() {
     let source = "x = 5; y = 10;";
     process(source);
 }
+
+#[test]
+fn test_function() {
+    let source = r#"
+    function add(a: i64, b: i64) -> i64 {
+        return a + b;
+    }
+    "#;
+    process(source);
+}
+
+#[test]
+fn test_if_statement() {
+    let source = r#"
+    x: i64 = 5;
+    if x > 10 {
+        y: i64 = 20;
+    } else {
+        y: i64 = 30;
+    }
+    "#;
+    process(source);
+}
+
+#[test]
+fn test_block() {
+    let source = r#"
+    {
+        x: i64 = 5;
+        y: i64 = 10;
+        if x < y {
+            x = y;
+        }
+    }
+    "#;
+    process(source);
+}
+
+#[test]
+fn test_variable_declaration() {
+    let source = r#"
+    x: i64 = 42;
+    y: i64 = 100;
+    "#;
+    process(source);
+}
+
+#[test]
+fn test_function_call() {
+    let source = r#"
+    function foo(x: i64) {
+        return x * 2;
+    }
+    result: i64 = foo(10);
+    "#;
+    process(source);
+}
