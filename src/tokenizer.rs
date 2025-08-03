@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 pub const PUNCTUATION: [&str; 10] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":"];
 
 pub const OPERATORS: [&str; 12] = [
@@ -24,9 +26,9 @@ pub enum Token {
     Newline,
 }
 
-impl ToString for Token {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = match self {
             Token::Keyword(k) => k.clone(),
             Token::Identifier(s) => s.clone(),
             Token::Number(n) => n.to_string(),
@@ -34,7 +36,8 @@ impl ToString for Token {
             Token::Operator(op) => op.clone(),
             Token::Punctuation(p) => p.clone(),
             Token::Newline => "\n".to_string(),
-        }
+        };
+        write!(f, "{}", fmtstr)
     }
 }
 

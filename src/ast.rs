@@ -76,8 +76,8 @@ impl Ast {
                 //
                 // Handle Identifiers:
                 //
-                //  ---- Assignment: `identifier = value;`
-                //  -------- Example: `x = 42;`
+                //  ---- Assignment: `identifier : type = value;`
+                //  -------- Example: `x : type = 42;`
                 //
                 //  ---- Function calls: `identifier(arg1, arg2);`
                 //  -------- Example: `print("Hello, World!");`
@@ -91,6 +91,23 @@ impl Ast {
                     if let Some(next_token) = self.peek_token() {
                         match &next_token.token {
                             //
+                            // Declaration case
+                            //
+                            Token::Punctuation(p) if p == ":" => {
+                                // Get next token and make sure its an identifier and a valid type
+                                self.next_token();
+                                if let Some(type_token) = self.peek_token() {
+                                    match &type_token.token {
+                                        _ => {
+                                            panic!(
+                                                "Unexpected token `{}`, expected a type identifier!",
+                                                type_token.token
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            //
                             // Assignment case:
                             //
                             Token::Operator(_) => {
@@ -98,7 +115,10 @@ impl Ast {
                                 self.expect_operator();
                                 let expr = self.parse_expr();
                                 statements.push(Statement::Assignment {
-                                    identifier: Expression::Variable(name_clone),
+                                    identifier: Expression::Variable(Variable {
+                                        name: name_clone,
+                                        var_type: Type::ToBeEvaluated,
+                                    }),
                                     value: expr,
                                 });
                             }
@@ -107,7 +127,10 @@ impl Ast {
                             //
                             Token::Punctuation(p) if p == "(" => {
                                 // Handle function call case
-                                let callee = Expression::Variable(name_clone);
+                                let callee = Expression::Variable(Variable {
+                                    name: name_clone,
+                                    var_type: Type::ToBeEvaluated,
+                                });
                                 let call_statement = self.parse_call(callee);
                                 statements.push(call_statement);
                             }
@@ -297,7 +320,10 @@ impl Ast {
                 Token::Identifier(name) => {
                     let name_clone = name.clone();
                     self.next_token();
-                    Expression::Variable(name_clone)
+                    Expression::Variable(Variable {
+                        name: name_clone,
+                        var_type: Type::ToBeEvaluated
+                    })
                 }
                 Token::Punctuation(p) if p == "(" => {
                     self.next_token();

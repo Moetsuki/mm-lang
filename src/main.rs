@@ -26,11 +26,11 @@ fn process(source: &str) {
 
     print_block(&block, 0);
 
-    //let mut llvm = llvm::LLVM::new(ast);
+    let mut llvm = llvm::LLVM::new(ast);
 
-    //llvm.compile();
+    llvm.compile();
 
-    //println!("{}", llvm.output());
+    println!("{}", llvm.output());
 }
 
 fn print_block(block: &block::Block, level: usize) {
@@ -74,9 +74,9 @@ fn print_block(block: &block::Block, level: usize) {
 
 fn main() {
     let source = r#"
-    x = 5; y = 10;
-    z = x + y // This is a comment
-    bar = 2;
+    x: i32 = 5; y: u32 = 10;
+    z: i64 = x + y // This is a comment
+    bar : u8 = 2;
     if z > 15 {
         print("yes + no"); //Another comment
     } else {

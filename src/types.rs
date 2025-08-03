@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -17,11 +17,12 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Array(Box<Type>),
     UserType(String),
+    ToBeEvaluated,
 }
 
-impl ToString for Type {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = match self {
             Type::Bool => "bool".to_string(),
             Type::I8 => "i8".to_string(),
             Type::I16 => "i16".to_string(),
@@ -45,7 +46,9 @@ impl ToString for Type {
             ),
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
             Type::UserType(name) => name.clone(),
-        }
+            Type::ToBeEvaluated => "TBE".to_string(),
+        };
+        write!(f, "{}", fmtstr)
     }
 }
 

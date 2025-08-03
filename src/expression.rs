@@ -1,6 +1,9 @@
+use crate::variable::Variable;
+use std::fmt::Display;
+
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Variable(String),
+    Variable(Variable),
     Number(i64),
     StringLiteral(String),
     Boolean(bool),
@@ -15,24 +18,18 @@ pub enum Expression {
     },
 }
 
-impl ToString for Expression {
-    fn to_string(&self) -> String {
-        match self {
-            Expression::Variable(name) => format!("Variable({})", name),
+impl Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = match self {
+            Expression::Variable(var) => format!("Variable::<{}>({})", var.var_type, var.name),
             Expression::Number(value) => format!("Number({})", value),
             Expression::StringLiteral(value) => format!("StringLiteral({})", value),
             Expression::Boolean(value) => format!("Boolean({})", value),
             Expression::BinaryOp { op, left, right } => {
-                format!(
-                    "BinaryOp({} {} {})",
-                    left.to_string(),
-                    op,
-                    right.to_string()
-                )
+                format!("BinaryOp({} {} {})", left, op, right)
             }
-            Expression::UnaryOp { op, expr } => {
-                format!("UnaryOp({} {})", op, expr.to_string())
-            }
-        }
+            Expression::UnaryOp { op, expr } => format!("UnaryOp({} {})", op, expr),
+        };
+        write!(f, "{}", fmtstr)
     }
 }

@@ -232,6 +232,7 @@ impl LLVM {
         output
     }
 
+    #[track_caller]
     pub fn transform(&mut self) -> Evaluation {
         let mut eval = Evaluation {
             prologue: IR::new(),
@@ -247,51 +248,25 @@ impl LLVM {
                 Statement::Assignment {
                     identifier: lhs,
                     value: rhs,
-                } => {
-                    match lhs {
-                        Expression::Variable(_) => {
-                            //
-                        }
-                        _ => {
-                            panic!(
-                                "Unsupported left-hand side identifier type in LLVM IR transformation"
-                            );
-                        }
+                } => match lhs {
+                    Expression::Variable(var_info) => {
+                        let rhs_eval = self.transform_expression(rhs.clone());
+                        eval.prologue
+                            .instructions
+                            .extend(rhs_eval.prologue.instructions);
+
+                        eval.epilogue.push(format!(
+                            "%{} = {}",
+                            eval.register.to_string(),
+                            rhs_eval.register.to_string()
+                        ));
+
+                        self.scope.insert(eval.register.clone(), var_info.clone());
                     }
-
-                    match rhs {
-                        Expression::Number(_) => {
-                            let rhs_eval = self.transform_expression(rhs.clone());
-
-                            eval.prologue
-                                .instructions
-                                .extend(rhs_eval.prologue.instructions);
-
-                            eval.epilogue
-                                .instructions
-                                .extend(rhs_eval.epilogue.instructions);
-
-                            let result_register = Register::new();
-
-                            self.scope.insert(
-                                result_register.clone(),
-                                Variable {
-                                    name: lhs.to_string(),
-                                    var_type: Type::I32,
-                                },
-                            );
-
-                            eval.epilogue.push(format!(
-                                "%{} = add i32 0, %{}",
-                                result_register.to_string(),
-                                rhs_eval.register.to_string(),
-                            ));
-                        }
-                        _ => {
-                            panic!("Unsupported identifier type in LLVM IR transformation");
-                        }
+                    _ => {
+                        panic!("Unsupported lhs expression in LLVM IR transformation");
                     }
-                }
+                },
                 _ => {
                     panic!("Unsupported statement type in LLVM IR transformation");
                 }
@@ -303,6 +278,7 @@ impl LLVM {
         eval
     }
 
+    #[track_caller]
     pub fn transform_expression(&mut self, expr: Expression) -> Evaluation {
         let mut eval = Evaluation {
             prologue: IR::new(),
