@@ -150,7 +150,10 @@ pub struct Register {
 impl Register {
     pub fn new() -> Self {
         let id = REGISTER_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        Register { id, llvm_type: "none".to_string() }
+        Register {
+            id,
+            llvm_type: "none".to_string(),
+        }
     }
 }
 
@@ -250,7 +253,8 @@ impl LLVM {
 
         self.main_prologue.push(format!("\n; MAIN PROLOGUE"));
         //self.main_prologue.push(format!("@main = global i32 0"));
-        self.main_prologue.push(format!("define i32 @main() {{\n"));
+        self.main_prologue.push(format!("define i32 @main() {{"));
+        self.main_prologue.push(format!("entry:"));
 
         let eval = self.transform();
         self.main.instructions.extend(eval.prologue.instructions);
@@ -352,7 +356,7 @@ impl LLVM {
                     // Compare condition with zero
                     let cmp_register = Register::new();
                     eval.epilogue.push(format!(
-                        "%{} = icmp ne i32 %{}, 0",
+                        "%{} = icmp ne i64 %{}, 0",
                         cmp_register.to_string(),
                         condition_eval.register.to_string()
                     ));
@@ -416,6 +420,7 @@ impl LLVM {
                         "\ndefine {} @{}({}) {{",
                         return_type_llvm, name, param_str
                     ));
+                    self.code.push(format!("entry:"));
 
                     // Set up function scope
                     self.scope.enter_scope();
@@ -452,8 +457,6 @@ impl LLVM {
                         .extend(body_eval.epilogue.instructions);
 
                     // Find the return statement and check if its type matches the function's return type
-                    
-                    
 
                     self.code.push(format!("}}"));
 
@@ -538,7 +541,7 @@ impl LLVM {
                     // Add return statement
                     eval.epilogue.push(format!(
                         "ret {} %{}",
-                        self.type_to_llvm(&Type::ToBeEvaluated),
+                        return_eval.register.llvm_type,
                         return_eval.register.to_string()
                     ));
                 }
@@ -567,10 +570,11 @@ impl LLVM {
         match expr {
             Expression::Number(value) => {
                 eval.epilogue.push(format!(
-                    "%{} = add i32 0, {}",
+                    "%{} = add i64 0, {}",
                     eval.register.to_string(),
                     value
                 ));
+                eval.register.llvm_type = "i64".to_string();
             }
             Expression::StringLiteral(value) => {
                 let string_data = StringData::new(value);
@@ -586,14 +590,16 @@ impl LLVM {
                         .replace("\"", "\\\"")
                 ));
 
-                // %msg = getelementptr [6 x i8], [6 x i8]* @.str, i32 0, i32 0
+                // %msg = getelementptr [6 x i8], [6 x i8]* @.str, i64 0, i64 0
                 eval.epilogue.push(format!(
-                    "%{} = getelementptr [{} x i8], [{} x i8]* @.{}, i32 0, i32 0",
+                    "%{} = getelementptr [{} x i8], [{} x i8]* @.{}, i64 0, i64 0",
                     eval.register.to_string(),
                     string_data.length() + 1,
                     string_data.length() + 1,
                     string_data.name()
                 ));
+
+                eval.register.llvm_type = "i8*".to_string(); // Pointer to string
             }
             Expression::Variable(var) => {
                 let var_register = self
@@ -617,67 +623,75 @@ impl LLVM {
                 match op.as_str() {
                     "+" => {
                         eval.epilogue.push(format!(
-                            "%{} = add i32 %{}, %{}",
+                            "%{} = add i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i64".to_string();
                     }
                     "-" => {
                         eval.epilogue.push(format!(
-                            "%{} = sub i32 %{}, %{}",
+                            "%{} = sub i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i64".to_string();
                     }
                     "*" => {
                         eval.epilogue.push(format!(
-                            "%{} = mul i32 %{}, %{}",
+                            "%{} = mul i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i64".to_string();
                     }
                     "/" => {
                         eval.epilogue.push(format!(
-                            "%{} = sdiv i32 %{}, %{}",
+                            "%{} = sdiv i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i64".to_string();
                     }
                     ">" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp gt i32 %{}, %{}",
+                            "%{} = icmp gt i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     "<" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp lt i32 %{}, %{}",
+                            "%{} = icmp lt i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     ">=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp ge i32 %{}, %{}",
+                            "%{} = icmp ge i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     "<=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp le i32 %{}, %{}",
+                            "%{} = icmp le i64 %{}, %{}",
                             eval.register.to_string(),
                             left_eval.register.to_string(),
                             right_eval.register.to_string()
                         ));
+                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     _ => {
                         panic!(
@@ -696,7 +710,7 @@ impl LLVM {
                 match op.as_str() {
                     "-" => {
                         eval.epilogue.push(format!(
-                            "%{} = sub i32 0, %{}",
+                            "%{} = sub i64 0, %{}",
                             eval.register.to_string(),
                             inner_eval.register.to_string()
                         ));

@@ -74,7 +74,7 @@ fn print_block(block: &block::Block, level: usize) {
 
 fn main() {
     let source = r#"
-    function baz(x: i32, y: u32) -> i64 {
+    function baz(x: i64, y: i64) -> i64 {
         return x + y;
     }
     "#;
