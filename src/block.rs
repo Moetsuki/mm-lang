@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::fmt::Display;
 
 use crate::statement::Statement;
 
@@ -14,5 +15,20 @@ impl Block {
     pub fn new(statements: Vec<Statement>) -> Self {
         let id = BLOCK_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         Block { id, statements }
+    }
+}
+
+impl Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = format!(
+            "Block(id: {}, statements: [{}])",
+            self.id,
+            self.statements
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        write!(f, "{}", fmtstr)
     }
 }

@@ -267,7 +267,7 @@ impl LLVM {
                     }
                 },
                 _ => {
-                    panic!("Unsupported statement type in LLVM IR transformation");
+                    panic!("Unsupported statement type in LLVM IR transformation\n[Statement]:\n {:?}", statement);
                 }
             }
         }
