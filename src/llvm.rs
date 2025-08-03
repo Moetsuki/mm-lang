@@ -1,6 +1,5 @@
 use core::panic;
 
-use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
 use std::collections::HashMap;

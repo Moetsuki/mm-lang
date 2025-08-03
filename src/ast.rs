@@ -94,10 +94,25 @@ impl Ast {
                             // Declaration case
                             //
                             Token::Punctuation(p) if p == ":" => {
+                                let mut var_info = Variable {
+                                    name: name_clone,
+                                    var_type: Type::ToBeEvaluated, // Default type, will be set later
+                                };
+
                                 // Get next token and make sure its an identifier and a valid type
                                 self.next_token();
                                 if let Some(type_token) = self.peek_token() {
                                     match &type_token.token {
+                                        Token::Identifier(type_name) => {
+                                            var_info.var_type = Type::from_str(type_name).unwrap_or(Type::ToBeEvaluated);
+                                            self.next_token(); // consume the type identifiers
+                                            self.expect_operator();
+                                            let expr = self.parse_expr();
+                                            statements.push(Statement::VariableDecl {
+                                                identifier: var_info,
+                                                value: expr,
+                                            });
+                                        }
                                         _ => {
                                             panic!(
                                                 "Unexpected token `{}`, expected a type identifier!",
@@ -318,7 +333,7 @@ impl Ast {
                     Expression::StringLiteral(value)
                 }
                 Token::Identifier(name) => {
-                    let name_clone = name.clone();
+                    let name_clone = name.clone(); 
                     self.next_token();
                     Expression::Variable(Variable {
                         name: name_clone,

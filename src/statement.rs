@@ -5,6 +5,10 @@ use crate::variable::Variable;
 
 #[derive(Debug, Clone)]
 pub enum Statement {
+    VariableDecl {
+        identifier: Variable,
+        value: Expression,
+    },
     Assignment {
         identifier: Expression,
         value: Expression,
