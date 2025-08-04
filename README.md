@@ -4,7 +4,7 @@ A custom programming language compiler written in Rust that compiles to LLVM IR.
 
 ## Overview
 
-MM-Lang is a statically-typed programming language with C-like syntax that compiles directly to LLVM IR. The language supports variables, functions, control flow, and basic arithmetic operations.
+MM-Lang is a statically-typed programming language with C-like syntax that compiles directly to LLVM IR. The language supports explicit variable declarations with type annotations, functions, control flow, type casting, and basic arithmetic operations.
 
 ## Features
 
@@ -13,14 +13,22 @@ MM-Lang is a statically-typed programming language with C-like syntax that compi
 - **Control Flow**: Support for if-else statements and function calls
 - **Type System**: Built-in types including integers, floats, booleans, and strings
 - **Function Definitions**: First-class functions with parameters and return types
+- **Type Casting**: Explicit type conversion using the `as` keyword
+- **Type Coercion**: Automatic type promotion for compatible types
 
 ## Language Syntax
 
+### Variable Declarations
+```mm
+x: i64 = 5;
+y: i64 = 10;
+z: i64 = x + y;
+```
+
 ### Variable Assignments
 ```mm
-x = 5;
-y = 10;
-z = x + y;
+x: i64 = 5;  // Declaration with initial value
+x = 10;      // Assignment to existing variable
 ```
 
 ### Function Definitions
@@ -32,17 +40,34 @@ function add(x: i64, y: i64) -> i64 {
 
 ### Control Flow
 ```mm
-if x > 5 {
-    print("x is greater than 5");
+x: i64 = 5;
+if x > 10 {
+    y: i64 = 20;
 } else {
-    print("x is 5 or less");
+    y: i64 = 30;
 }
 ```
 
 ### Function Calls
 ```mm
-result = add(10, 20);
-print("Result is: ", result);
+function foo(x: i64) -> i64 {
+    return x * 2;
+}
+result: i64 = foo(10);
+```
+
+### Type Casting
+```mm
+x: i64 = 5;
+y: i32 = x as i32;
+z: i64 = x + y;
+```
+
+### Type Coercion
+```mm
+x: i32 = 5;
+y: i8 = 10;
+z: i64 = x + y; // Implicit coercion from i32 to i64
 ```
 
 ## Project Structure
@@ -105,10 +130,9 @@ cargo test
 
 ### Simple Arithmetic
 ```mm
-x = 5;
-y = 10;
-result = x + y * 2;
-print("Result: ", result);
+x: i64 = 5;
+y: i64 = 10;
+result: i64 = x + y * 2;
 ```
 
 ### Function with Conditionals
@@ -121,8 +145,7 @@ function max(a: i64, b: i64) -> i64 {
     }
 }
 
-result = max(10, 20);
-print("Maximum: ", result);
+result: i64 = max(10, 20);
 ```
 
 ### Nested Control Flow
@@ -169,17 +192,22 @@ function categorize(value: i64) -> string {
 
 ### Assignment
 - `=` - Assignment
+- `as` - Type casting
 
 ## Grammar (EBNF)
 
 ```ebnf
 program = { statement } ;
 
-statement = assignment
+statement = variable_declaration
+          | assignment
           | function_def
           | if_statement
           | call_statement
-          | return_statement ;
+          | return_statement
+          | block ;
+
+variable_declaration = identifier ":" type "=" expression ";" ;
 
 assignment = identifier "=" expression ";" ;
 
@@ -194,6 +222,8 @@ call_statement = expression "(" [ argument_list ] ")" ";" ;
 
 return_statement = "return" expression ";" ;
 
+block = "{" { statement } "}" ;
+
 expression = term { ( "+" | "-" | "==" | "!=" | "<" | ">" | "<=" | ">=" ) term } ;
 
 term = factor { ( "*" | "/" | "%" ) factor } ;
@@ -201,6 +231,7 @@ term = factor { ( "*" | "/" | "%" ) factor } ;
 factor = number
        | string_literal
        | identifier
+       | identifier "as" type
        | "(" expression ")" ;
 
 type = "bool" | "i8" | "i16" | "i32" | "i64" 
@@ -235,9 +266,12 @@ The compiler follows a traditional multi-stage architecture:
 
 ## Future Roadmap
 
+- [x] Type casting with `as` keyword
+- [x] Implicit type coercion for compatible types
 - [ ] Advanced type system with generics
 - [ ] Module system and imports
 - [ ] Standard library
+- [ ] Print statements and I/O operations
 - [ ] Garbage collection
 - [ ] Pattern matching
 - [ ] Closures and higher-order functions
