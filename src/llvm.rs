@@ -346,6 +346,9 @@ impl LLVM {
                         eval.prologue
                             .instructions
                             .extend(rhs_eval.prologue.instructions);
+                        eval.epilogue
+                            .instructions
+                            .extend(rhs_eval.epilogue.instructions);
 
                         // replace the register with the one from rhs_eval
                         eval.register = rhs_eval.register.clone();
@@ -365,7 +368,7 @@ impl LLVM {
                     eval.prologue
                         .instructions
                         .extend(condition_eval.prologue.instructions);
-                    eval.prologue
+                    eval.epilogue
                         .instructions
                         .extend(condition_eval.epilogue.instructions);
 
@@ -655,6 +658,14 @@ impl LLVM {
                     .scope
                     .find(&var)
                     .expect(format!("Variable {} not found in scope", var.name).as_str());
+
+                // Send the variable to the evaluation register
+                eval.epilogue.push(format!(
+                    "%{} = add {} 0, %{}",
+                    eval.register.to_string(),
+                    var_register.llvm_type(),
+                    var_register.to_string()
+                ));
 
                 eval.register = var_register.clone();
             }
