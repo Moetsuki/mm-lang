@@ -2,7 +2,6 @@ use crate::block::Block;
 use crate::expression::Expression;
 use crate::statement::Statement;
 use crate::tokenizer::LexicalToken;
-use crate::tokenizer::KEYWORDS;
 use crate::tokenizer::OPERATORS;
 use crate::tokenizer::Token;
 use crate::types::Type;

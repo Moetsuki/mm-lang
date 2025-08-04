@@ -1,6 +1,6 @@
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, str::FromStr, hash::{Hash, Hasher}};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Type {
     Bool,
     I8,
@@ -73,6 +73,33 @@ impl FromStr for Type {
             "string" => Ok(Type::String),
             "none" => Ok(Type::NoneType),
             _ => Err(()),
+        }
+    }
+}
+
+impl Hash for Type {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Type::Bool => "bool".hash(state),
+            Type::I8 => "i8".hash(state),
+            Type::I16 => "i16".hash(state),
+            Type::I32 => "i32".hash(state),
+            Type::I64 => "i64".hash(state),
+            Type::U8 => "u8".hash(state),
+            Type::U16 => "u16".hash(state),
+            Type::U32 => "u32".hash(state),
+            Type::U64 => "u64".hash(state),
+            Type::F32 => "f32".hash(state),
+            Type::F64 => "f64".hash(state),
+            Type::String => "string".hash(state),
+            Type::NoneType => "none".hash(state),
+            Type::Function(params, ret) => {
+                params.hash(state);
+                ret.hash(state);
+            }
+            Type::Array(elem_type) => elem_type.hash(state),
+            Type::UserType(name) => name.hash(state),
+            Type::ToBeEvaluated => "TBE".hash(state),
         }
     }
 }

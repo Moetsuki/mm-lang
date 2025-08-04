@@ -153,3 +153,13 @@ fn test_casting() {
     "#;
     process(source);
 }
+
+#[test]
+fn test_coercion() {
+    let source = r#"
+    x: i32 = 5;
+    y: i8 = 10;
+    z: i64 = x + y; // Implicit coercion from i32 to i64
+    "#;
+    process(source);
+}

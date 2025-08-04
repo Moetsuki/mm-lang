@@ -144,15 +144,32 @@ static REGISTER_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct Register {
     pub id: u64,
-    pub llvm_type: String,
+    pub var_type: Type,
 }
 
 impl Register {
-    pub fn new(llvm_type: String) -> Self {
+    pub fn new(var_type: Type) -> Self {
         let id = REGISTER_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        Register {
-            id,
-            llvm_type,
+        Register { id, var_type }
+    }
+
+    pub fn llvm_type(&self) -> String {
+        match self.var_type {
+            Type::Bool => "i1".to_string(),
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::U8 => "i8".to_string(),
+            Type::U16 => "i16".to_string(),
+            Type::U32 => "i32".to_string(),
+            Type::U64 => "i64".to_string(),
+            Type::F32 => "float".to_string(),
+            Type::F64 => "double".to_string(),
+            Type::String => "i8*".to_string(),
+            Type::NoneType => "void".to_string(),
+            Type::ToBeEvaluated => "i64".to_string(),
+            _ => panic!("Unsupported type {} for LLVM register", self.var_type),
         }
     }
 }
@@ -287,36 +304,38 @@ impl LLVM {
         let mut eval = Evaluation {
             prologue: IR::new(),
             epilogue: IR::new(),
-            register: Register::new("i64".to_string()),
+            register: Register::new(Type::ToBeEvaluated),
         };
 
         self.scope.enter_scope();
 
         for statement in statements {
             match statement {
-                Statement::VariableDecl { identifier: var_info, value } => {
-                    let var_register = Register::new(self.type_to_llvm(&var_info.var_type));
-                    self.scope.insert(var_register.clone(), var_info.clone());
-
+                Statement::VariableDecl {
+                    identifier: var_info,
+                    value,
+                } => {
                     let value_eval = self.transform_expression(value.clone());
                     eval.prologue
                         .instructions
                         .extend(value_eval.prologue.instructions);
+                    eval.epilogue
+                        .instructions
+                        .extend(value_eval.epilogue.instructions);
 
-                    if value_eval.register.llvm_type != var_register.llvm_type {
-                        panic!(
-                            "Type mismatch in variable `{}` declaration: expected {}, got {}",
-                            var_info.name,
-                            var_register.llvm_type,
-                            value_eval.register.llvm_type
-                        );
-                    }
+                    // Handle type coercion if needed
+                    let final_register = if value_eval.register.var_type != var_info.var_type {
+                        self.insert_type_conversion(
+                            &mut eval,
+                            &value_eval.register,
+                            &var_info.var_type,
+                        )
+                    } else {
+                        value_eval.register
+                    };
 
-                    eval.epilogue.push(format!(
-                        "%{} = {}",
-                        eval.register.to_string(),
-                        value_eval.register.to_string()
-                    ));
+                    // Use the final_register directly as the variable's register
+                    self.scope.insert(final_register.clone(), var_info.clone());
                 }
                 Statement::Assignment {
                     identifier: lhs,
@@ -328,11 +347,8 @@ impl LLVM {
                             .instructions
                             .extend(rhs_eval.prologue.instructions);
 
-                        eval.epilogue.push(format!(
-                            "%{} = {}",
-                            eval.register.to_string(),
-                            rhs_eval.register.to_string()
-                        ));
+                        // replace the register with the one from rhs_eval
+                        eval.register = rhs_eval.register.clone();
 
                         self.scope.insert(eval.register.clone(), var_info.clone());
                     }
@@ -359,7 +375,7 @@ impl LLVM {
                     let done_label = format!("if_done_{}", eval.register.id);
 
                     // Compare condition with zero
-                    let cmp_register = Register::new("i64".to_string());
+                    let cmp_register = Register::new(Type::Bool);
                     eval.epilogue.push(format!(
                         "%{} = icmp ne i64 %{}, 0",
                         cmp_register.to_string(),
@@ -412,7 +428,7 @@ impl LLVM {
                     body,
                 } => {
                     // Get LLVM types
-                    let return_type_llvm = self.type_to_llvm(ret_type);
+                    let return_type_llvm = self.type_to_llvm(&ret_type.clone());
 
                     // Generate function signature
                     let param_str = params
@@ -432,7 +448,7 @@ impl LLVM {
 
                     // Add parameters to scope
                     for param in params {
-                        let param_register = Register::new(self.type_to_llvm(&param.var_type));
+                        let param_register = Register::new(param.var_type.clone());
                         // In LLVM, function parameters are already available as registers
                         // So we can directly map them
                         self.scope.insert(param_register.clone(), param.clone());
@@ -475,7 +491,7 @@ impl LLVM {
                             Box::new(ret_type.clone()),
                         ),
                     };
-                    let func_register = Register::new(return_type_llvm.clone());
+                    let func_register = Register::new(ret_type.clone());
                     self.scope.insert_top(func_register, var_info);
                 }
                 Statement::Call { callee, args } => {
@@ -546,7 +562,7 @@ impl LLVM {
                     // Add return statement
                     eval.epilogue.push(format!(
                         "ret {} %{}",
-                        return_eval.register.llvm_type,
+                        return_eval.register.llvm_type(),
                         return_eval.register.to_string()
                     ));
                 }
@@ -569,7 +585,7 @@ impl LLVM {
         let mut eval = Evaluation {
             prologue: IR::new(),
             epilogue: IR::new(),
-            register: Register::new("none".to_string()),
+            register: Register::new(Type::ToBeEvaluated),
         };
 
         match expr {
@@ -579,7 +595,7 @@ impl LLVM {
                     eval.register.to_string(),
                     value
                 ));
-                eval.register.llvm_type = "i64".to_string();
+                eval.register.var_type = Type::I64;
             }
             Expression::StringLiteral(value) => {
                 let string_data = StringData::new(value);
@@ -604,7 +620,7 @@ impl LLVM {
                     string_data.name()
                 ));
 
-                eval.register.llvm_type = "i8*".to_string(); // Pointer to string
+                eval.register.var_type = Type::String;
             }
             Expression::Variable(var) => {
                 let var_register = self
@@ -625,78 +641,99 @@ impl LLVM {
                     .instructions
                     .extend(right_eval.prologue.instructions);
 
+                // Determine the result type (promote to larger type)
+                let result_type = self.determine_binary_op_result_type(
+                    &left_eval.register.var_type,
+                    &right_eval.register.var_type,
+                );
+
+                // Convert operands to result type if needed
+                let left_converted = if left_eval.register.var_type != result_type {
+                    self.insert_type_conversion(&mut eval, &left_eval.register, &result_type)
+                } else {
+                    left_eval.register
+                };
+
+                let right_converted = if right_eval.register.var_type != result_type {
+                    self.insert_type_conversion(&mut eval, &right_eval.register, &result_type)
+                } else {
+                    right_eval.register
+                };
+
+                let result_llvm_type = self.type_to_llvm(&result_type);
+
                 match op.as_str() {
                     "+" => {
                         eval.epilogue.push(format!(
-                            "%{} = add i64 %{}, %{}",
+                            "%{} = add {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i64".to_string();
                     }
                     "-" => {
                         eval.epilogue.push(format!(
-                            "%{} = sub i64 %{}, %{}",
+                            "%{} = sub {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i64".to_string();
                     }
                     "*" => {
                         eval.epilogue.push(format!(
-                            "%{} = mul i64 %{}, %{}",
+                            "%{} = mul {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i64".to_string();
                     }
                     "/" => {
                         eval.epilogue.push(format!(
-                            "%{} = sdiv i64 %{}, %{}",
+                            "%{} = sdiv {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i64".to_string();
                     }
                     ">" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp gt i64 %{}, %{}",
+                            "%{} = icmp gt {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     "<" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp lt i64 %{}, %{}",
+                            "%{} = icmp lt {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     ">=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp ge i64 %{}, %{}",
+                            "%{} = icmp ge {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     "<=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp le i64 %{}, %{}",
+                            "%{} = icmp le {} %{}, %{}",
                             eval.register.to_string(),
-                            left_eval.register.to_string(),
-                            right_eval.register.to_string()
+                            result_llvm_type,
+                            left_converted.to_string(),
+                            right_converted.to_string()
                         ));
-                        eval.register.llvm_type = "i1".to_string(); // Boolean result
                     }
                     _ => {
                         panic!(
@@ -705,6 +742,8 @@ impl LLVM {
                         );
                     }
                 }
+
+                eval.register.var_type = result_type;
             }
             Expression::UnaryOp { op, expr } => {
                 let inner_eval = self.transform_expression(*expr);
@@ -741,7 +780,7 @@ impl LLVM {
                     .instructions
                     .extend(inner_eval.epilogue.instructions);
 
-                let source_type = &inner_eval.register.llvm_type;
+                let source_type = &inner_eval.register.llvm_type();
                 let target_llvm = self.type_to_llvm(&target_type);
 
                 match (source_type.as_str(), target_llvm.as_str()) {
@@ -832,7 +871,7 @@ impl LLVM {
                     }
                 }
 
-                eval.register.llvm_type = target_llvm;
+                eval.register.var_type = target_type;
             }
             _ => {
                 panic!(
@@ -843,5 +882,137 @@ impl LLVM {
         }
 
         eval
+    }
+
+    fn insert_type_conversion(
+        &self,
+        eval: &mut Evaluation,
+        from_register: &Register,
+        target_type: &Type,
+    ) -> Register {
+        if from_register.var_type == *target_type {
+            return from_register.clone();
+        }
+
+        let new_register = Register::new(target_type.clone());
+        let from_llvm = from_register.llvm_type();
+        let to_llvm = self.type_to_llvm(target_type);
+
+        match (from_llvm.as_str(), to_llvm.as_str()) {
+            // Truncation from i64
+            ("i64", "i32") | ("i64", "i16") | ("i64", "i8") | ("i64", "i1") => {
+                eval.epilogue.push(format!(
+                    "%{} = trunc {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Truncation from i32
+            ("i32", "i16") | ("i32", "i8") | ("i32", "i1") => {
+                eval.epilogue.push(format!(
+                    "%{} = trunc {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Truncation from i16
+            ("i16", "i8") | ("i16", "i1") => {
+                eval.epilogue.push(format!(
+                    "%{} = trunc {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Truncation from i8
+            ("i8", "i1") => {
+                eval.epilogue.push(format!(
+                    "%{} = trunc {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Sign extension to i64
+            ("i32", "i64") | ("i16", "i64") | ("i8", "i64") | ("i1", "i64") => {
+                eval.epilogue.push(format!(
+                    "%{} = sext {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Sign extension to i32
+            ("i8", "i32") | ("i16", "i32") | ("i1", "i32") => {
+                eval.epilogue.push(format!(
+                    "%{} = sext {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Sign extension to i16
+            ("i8", "i16") | ("i1", "i16") => {
+                eval.epilogue.push(format!(
+                    "%{} = sext {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            // Sign extension to i8
+            ("i1", "i8") => {
+                eval.epilogue.push(format!(
+                    "%{} = zext {} %{} to {}",
+                    new_register.to_string(),
+                    from_llvm,
+                    from_register.to_string(),
+                    to_llvm
+                ));
+            }
+            _ => panic!(
+                "Unsupported automatic conversion from {} to {}",
+                from_llvm, to_llvm
+            ),
+        }
+
+        new_register
+    }
+
+    fn determine_binary_op_result_type(&self, left_type: &Type, right_type: &Type) -> Type {
+        use crate::types::Type::*;
+
+        match (left_type, right_type) {
+            // Same types
+            (I8, I8) => I8,
+            (I16, I16) => I16,
+            (I32, I32) => I32,
+            (I64, I64) => I64,
+
+            // Mixed types - promote to larger type
+            (I8, I16) | (I16, I8) => I16,
+            (I8, I32) | (I32, I8) => I32,
+            (I8, I64) | (I64, I8) => I64,
+            (I16, I32) | (I32, I16) => I32,
+            (I16, I64) | (I64, I16) => I64,
+            (I32, I64) | (I64, I32) => I64,
+
+            (F32, F32) => F32,
+            (F64, F64) => F64,
+
+            // Mixed float types - promote to larger type
+            (F32, F64) | (F64, F32) => F64,
+
+            _ => I64, // Default fallback
+        }
     }
 }
