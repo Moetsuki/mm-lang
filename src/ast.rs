@@ -2,6 +2,7 @@ use crate::block::Block;
 use crate::expression::Expression;
 use crate::statement::Statement;
 use crate::tokenizer::LexicalToken;
+use crate::tokenizer::KEYWORDS;
 use crate::tokenizer::OPERATORS;
 use crate::tokenizer::Token;
 use crate::types::Type;
@@ -422,16 +423,40 @@ impl Ast {
         expr
     }
 
-    // Handles higher precedence (e.g. * and /)
-    fn parse_term(&mut self) -> Expression {
+    // This method should have high precedence in the expression parsing
+    fn parse_cast(&mut self) -> Expression {
         let mut expr = self.parse_factor();
+
+        while let Some(lexical_token) = self.peek_token() {
+            if let Token::Keyword(keyword) = &lexical_token.token {
+                if keyword == "as" {
+                    self.next_token(); // consume 'as'
+                    let target_type = self.parse_type();
+                    expr = Expression::Cast {
+                        expr: Box::new(expr),
+                        target_type,
+                    };
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        expr
+    }
+
+    // Then modify parse_term to call parse_cast instead of parse_factor
+    fn parse_term(&mut self) -> Expression {
+        let mut expr = self.parse_cast(); // Changed from parse_factor
 
         while let Some(lexical_token) = self.peek_token() {
             if let Token::Operator(op) = &lexical_token.token {
                 if op == "*" || op == "/" {
                     let op = op.clone();
                     self.next_token();
-                    let rhs = self.parse_factor();
+                    let rhs = self.parse_cast(); // Changed from parse_factor
                     expr = Expression::BinaryOp {
                         op,
                         left: Box::new(expr),

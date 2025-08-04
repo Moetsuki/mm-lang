@@ -143,3 +143,13 @@ fn test_function_call() {
     "#;
     process(source);
 }
+
+#[test]
+fn test_casting() {
+    let source = r#"
+    x: i64 = 5;
+    y: i32 = x as i32;
+    z: i64 = x + y;
+    "#;
+    process(source);
+}

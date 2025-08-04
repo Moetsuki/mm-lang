@@ -1,4 +1,4 @@
-use crate::variable::Variable;
+use crate::{types::Type, variable::Variable};
 use std::fmt::Display;
 
 #[derive(Debug, Clone)]
@@ -7,6 +7,10 @@ pub enum Expression {
     Number(i64),
     StringLiteral(String),
     Boolean(bool),
+    Cast {
+        expr: Box<Expression>,
+        target_type: Type,
+    },
     BinaryOp {
         op: String,
         left: Box<Expression>,
@@ -25,6 +29,9 @@ impl Display for Expression {
             Expression::Number(value) => format!("Number({})", value),
             Expression::StringLiteral(value) => format!("StringLiteral({})", value),
             Expression::Boolean(value) => format!("Boolean({})", value),
+            Expression::Cast { expr, target_type } => {
+                format!("Cast({}, to: {})", expr, target_type)
+            }
             Expression::BinaryOp { op, left, right } => {
                 format!("BinaryOp({} {} {})", left, op, right)
             }
