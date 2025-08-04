@@ -326,7 +326,7 @@ impl LLVM {
                     // Handle type coercion if needed
                     let final_register = if value_eval.register.var_type != var_info.var_type {
                         self.insert_type_conversion(
-                            &mut eval,
+                            &mut eval.epilogue,
                             &value_eval.register,
                             &var_info.var_type,
                         )
@@ -469,16 +469,40 @@ impl LLVM {
                     }
 
                     // Transform function body
-                    let body_eval = self.transform_block(&body.statements);
+                    let mut body_eval = self.transform_block(&body.statements);
+
+                    // Check the body_eval register, if we don't have a match
+                    // We need to fix the last instruction.
+                    if body_eval.register.var_type != *ret_type {
+                        // Make sure the last instruction of the epilogue is a ret
+                        body_eval.epilogue.instructions.last().map(|last| {
+                            if !last.starts_with("ret") {
+                                panic!(
+                                    "Function '{}' return type mismatch: expected {}, got {}",
+                                    name, ret_type, body_eval.register.var_type
+                                );
+                            }
+                        });
+                        // Remove the last instruction
+                        body_eval.epilogue.instructions.pop();
+
+                        // Coerce the return value register to the expected return type in a new register
+                        let coerced_register = self.insert_type_conversion(&mut body_eval.epilogue, &body_eval.register, &ret_type);
+
+                        // Return the coerced register
+                        body_eval.epilogue.push(format!(
+                            "ret {} %{}",
+                            self.type_to_llvm(&coerced_register.var_type),
+                            coerced_register.to_string()
+                        ));
+                    }
+
                     self.code
                         .instructions
                         .extend(body_eval.prologue.instructions);
                     self.code
                         .instructions
                         .extend(body_eval.epilogue.instructions);
-
-                    // Find the return statement and check if its type matches the function's return type
-
                     self.code.push(format!("}}"));
 
                     self.scope.exit_scope();
@@ -558,6 +582,10 @@ impl LLVM {
                     eval.prologue
                         .instructions
                         .extend(return_eval.epilogue.instructions);
+
+                    // Set the evaluation register to the return value of this block
+                    // This captures the return type information to be used later
+                    eval.register = return_eval.register.clone();
 
                     // Add return statement
                     eval.epilogue.push(format!(
@@ -649,13 +677,13 @@ impl LLVM {
 
                 // Convert operands to result type if needed
                 let left_converted = if left_eval.register.var_type != result_type {
-                    self.insert_type_conversion(&mut eval, &left_eval.register, &result_type)
+                    self.insert_type_conversion(&mut eval.epilogue, &left_eval.register, &result_type)
                 } else {
                     left_eval.register
                 };
 
                 let right_converted = if right_eval.register.var_type != result_type {
-                    self.insert_type_conversion(&mut eval, &right_eval.register, &result_type)
+                    self.insert_type_conversion(&mut eval.epilogue, &right_eval.register, &result_type)
                 } else {
                     right_eval.register
                 };
@@ -750,21 +778,41 @@ impl LLVM {
                 eval.prologue
                     .instructions
                     .extend(inner_eval.prologue.instructions);
+                eval.epilogue
+                    .instructions
+                    .extend(inner_eval.epilogue.instructions);
 
                 match op.as_str() {
                     "-" => {
                         eval.epilogue.push(format!(
-                            "%{} = sub i64 0, %{}",
+                            "%{} = sub {} 0, %{}",
                             eval.register.to_string(),
+                            inner_eval.register.llvm_type(),
                             inner_eval.register.to_string()
                         ));
                     }
                     "!" => {
+                        // First convert to boolean if not already
+                        let bool_register = if inner_eval.register.var_type != Type::Bool {
+                            let temp_reg = Register::new(Type::Bool);
+                            eval.epilogue.push(format!(
+                                "%{} = icmp ne {} %{}, 0",
+                                temp_reg.to_string(),
+                                inner_eval.register.llvm_type(),
+                                inner_eval.register.to_string()
+                            ));
+                            temp_reg
+                        } else {
+                            inner_eval.register
+                        };
+
+                        // Then negate the boolean
                         eval.epilogue.push(format!(
-                            "%{} = xor i1 true, %{}",
+                            "%{} = xor i1 %{}, true",
                             eval.register.to_string(),
-                            inner_eval.register.to_string()
+                            bool_register.to_string()
                         ));
+                        eval.register.var_type = Type::Bool;
                     }
                     _ => {
                         panic!("Unsupported unary operator: {}", op);
@@ -797,7 +845,6 @@ impl LLVM {
 
                     // Integer extension (smaller to larger)
                     ("i32", "i64") | ("i16", "i64") | ("i8", "i64") => {
-                        // Use sext for signed extension, zext for unsigned
                         eval.epilogue.push(format!(
                             "%{} = sext {} %{} to {}",
                             eval.register.to_string(),
@@ -886,7 +933,7 @@ impl LLVM {
 
     fn insert_type_conversion(
         &self,
-        eval: &mut Evaluation,
+        code: &mut IR,
         from_register: &Register,
         target_type: &Type,
     ) -> Register {
@@ -901,7 +948,7 @@ impl LLVM {
         match (from_llvm.as_str(), to_llvm.as_str()) {
             // Truncation from i64
             ("i64", "i32") | ("i64", "i16") | ("i64", "i8") | ("i64", "i1") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = trunc {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -911,7 +958,7 @@ impl LLVM {
             }
             // Truncation from i32
             ("i32", "i16") | ("i32", "i8") | ("i32", "i1") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = trunc {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -921,7 +968,7 @@ impl LLVM {
             }
             // Truncation from i16
             ("i16", "i8") | ("i16", "i1") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = trunc {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -931,7 +978,7 @@ impl LLVM {
             }
             // Truncation from i8
             ("i8", "i1") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = trunc {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -941,7 +988,7 @@ impl LLVM {
             }
             // Sign extension to i64
             ("i32", "i64") | ("i16", "i64") | ("i8", "i64") | ("i1", "i64") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = sext {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -951,7 +998,7 @@ impl LLVM {
             }
             // Sign extension to i32
             ("i8", "i32") | ("i16", "i32") | ("i1", "i32") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = sext {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -961,7 +1008,7 @@ impl LLVM {
             }
             // Sign extension to i16
             ("i8", "i16") | ("i1", "i16") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = sext {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,
@@ -971,7 +1018,7 @@ impl LLVM {
             }
             // Sign extension to i8
             ("i1", "i8") => {
-                eval.epilogue.push(format!(
+                code.push(format!(
                     "%{} = zext {} %{} to {}",
                     new_register.to_string(),
                     from_llvm,

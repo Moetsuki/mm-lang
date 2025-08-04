@@ -74,7 +74,7 @@ fn print_block(block: &block::Block, level: usize) {
 
 fn main() {
     let source = r#"
-    function baz(x: i64, y: i64) -> i64 {
+    function baz(x: i32, y: i32) -> i64 {
         return x + y;
     }
     "#;
@@ -83,7 +83,7 @@ fn main() {
 
 #[test]
 fn test_assignment() {
-    let source = "x = 5; y = 10;";
+    let source = "x: i64 = 5; y: i64 = 10;";
     process(source);
 }
 
@@ -136,7 +136,7 @@ fn test_variable_declaration() {
 #[test]
 fn test_function_call() {
     let source = r#"
-    function foo(x: i64) {
+    function foo(x: i64) -> i64{
         return x * 2;
     }
     result: i64 = foo(10);
