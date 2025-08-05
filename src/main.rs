@@ -11,6 +11,8 @@ mod variable;
 
 use ast::Ast;
 use statement::Statement;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use tokenizer::tokenize;
 
 fn process(source: &str) {
@@ -30,7 +32,48 @@ fn process(source: &str) {
 
     llvm.compile();
 
-    println!("{}", llvm.output());
+    let ir_output = llvm.output();
+    println!("{}", ir_output);
+
+    // Compile LLVM IR via stdin
+    let mut clang = Command::new("clang")
+        .args(&["-x", "ir", "-", "-o", "build/output"]) // -x ir tells clang it's LLVM IR, - means stdin
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start clang");
+
+    // Write IR to clang's stdin
+    if let Some(stdin) = clang.stdin.as_mut() {
+        stdin
+            .write_all(ir_output.as_bytes())
+            .expect("Failed to write to clang stdin");
+    }
+
+    // Wait for compilation to complete
+    let output = clang
+        .wait_with_output()
+        .expect("Failed to read clang output");
+
+    if output.status.success() {
+        println!("Compilation successful!");
+
+        // Run the executable
+        let run_output = Command::new("./build/output")
+            .output()
+            .expect("Failed to run executable");
+
+        println!("Program output:");
+        println!("stdout: {}", String::from_utf8_lossy(&run_output.stdout));
+        if !run_output.stderr.is_empty() {
+            println!("stderr: {}", String::from_utf8_lossy(&run_output.stderr));
+        }
+        println!("Exit code: {}", run_output.status.code().unwrap_or(-1));
+    } else {
+        println!("Compilation failed:");
+        println!("{}", String::from_utf8_lossy(&output.stderr));
+    }
 }
 
 fn print_block(block: &block::Block, level: usize) {
