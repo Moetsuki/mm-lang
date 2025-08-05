@@ -271,12 +271,10 @@ The compiler follows a traditional multi-stage architecture:
 - [ ] Advanced type system with generics
 - [ ] Module system and imports
 - [ ] Standard library
-- [ ] Print statements and I/O operations
-- [ ] Garbage collection
+- [x] Print statements and I/O operations
 - [ ] Pattern matching
 - [ ] Closures and higher-order functions
 - [ ] Compile-time computation
-- [ ] Error handling with exceptions
 - [ ] Concurrency primitives
 
 ## Contact
