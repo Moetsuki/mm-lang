@@ -350,9 +350,18 @@ impl LLVM {
                             .instructions
                             .extend(rhs_eval.epilogue.instructions);
 
-                        // replace the register with the one from rhs_eval
-                        eval.register = rhs_eval.register.clone();
+                        // Handle type coercion if needed
+                        let coerced_register = if rhs_eval.register.var_type != var_info.var_type {
+                            self.insert_type_conversion(
+                                &mut eval.epilogue,
+                                &rhs_eval.register,
+                                &var_info.var_type,
+                            )
+                        } else {
+                            rhs_eval.register
+                        };
 
+                        eval.register = coerced_register.clone();
                         self.scope.insert(eval.register.clone(), var_info.clone());
                     }
                     _ => {
@@ -490,7 +499,11 @@ impl LLVM {
                         body_eval.epilogue.instructions.pop();
 
                         // Coerce the return value register to the expected return type in a new register
-                        let coerced_register = self.insert_type_conversion(&mut body_eval.epilogue, &body_eval.register, &ret_type);
+                        let coerced_register = self.insert_type_conversion(
+                            &mut body_eval.epilogue,
+                            &body_eval.register,
+                            &ret_type,
+                        );
 
                         // Return the coerced register
                         body_eval.epilogue.push(format!(
@@ -659,14 +672,6 @@ impl LLVM {
                     .find(&var)
                     .expect(format!("Variable {} not found in scope", var.name).as_str());
 
-                // Send the variable to the evaluation register
-                eval.epilogue.push(format!(
-                    "%{} = add {} 0, %{}",
-                    eval.register.to_string(),
-                    var_register.llvm_type(),
-                    var_register.to_string()
-                ));
-
                 eval.register = var_register.clone();
             }
             Expression::BinaryOp { op, left, right } => {
@@ -679,6 +684,12 @@ impl LLVM {
                 eval.prologue
                     .instructions
                     .extend(right_eval.prologue.instructions);
+                eval.epilogue
+                    .instructions
+                    .extend(left_eval.epilogue.instructions);
+                eval.epilogue
+                    .instructions
+                    .extend(right_eval.epilogue.instructions);
 
                 // Determine the result type (promote to larger type)
                 let result_type = self.determine_binary_op_result_type(
@@ -686,15 +697,26 @@ impl LLVM {
                     &right_eval.register.var_type,
                 );
 
+                // Update the evaluation register's type
+                eval.register.var_type = result_type.clone();
+
                 // Convert operands to result type if needed
                 let left_converted = if left_eval.register.var_type != result_type {
-                    self.insert_type_conversion(&mut eval.epilogue, &left_eval.register, &result_type)
+                    self.insert_type_conversion(
+                        &mut eval.epilogue,
+                        &left_eval.register,
+                        &result_type,
+                    )
                 } else {
                     left_eval.register
                 };
 
                 let right_converted = if right_eval.register.var_type != result_type {
-                    self.insert_type_conversion(&mut eval.epilogue, &right_eval.register, &result_type)
+                    self.insert_type_conversion(
+                        &mut eval.epilogue,
+                        &right_eval.register,
+                        &result_type,
+                    )
                 } else {
                     right_eval.register
                 };
@@ -730,9 +752,20 @@ impl LLVM {
                         ));
                     }
                     "/" => {
+                        self.expect_signedness_match(
+                            &left_converted.var_type,
+                            &right_converted.var_type,
+                        );
+
+                        let llvm_op = match &left_converted.var_type.is_signed() {
+                            true => "sdiv",
+                            false => "udiv",
+                        };
+
                         eval.epilogue.push(format!(
-                            "%{} = sdiv {} %{}, %{}",
+                            "%{} = {} {} %{}, %{}",
                             eval.register.to_string(),
+                            llvm_op,
                             result_llvm_type,
                             left_converted.to_string(),
                             right_converted.to_string()
@@ -781,8 +814,6 @@ impl LLVM {
                         );
                     }
                 }
-
-                eval.register.var_type = result_type;
             }
             Expression::UnaryOp { op, expr } => {
                 let inner_eval = self.transform_expression(*expr);
@@ -801,6 +832,9 @@ impl LLVM {
                             inner_eval.register.llvm_type(),
                             inner_eval.register.to_string()
                         ));
+
+                        // Update the evaluation register's type
+                        eval.register.var_type = inner_eval.register.var_type.clone();
                     }
                     "!" => {
                         // First convert to boolean if not already
@@ -1071,6 +1105,15 @@ impl LLVM {
             (F32, F64) | (F64, F32) => F64,
 
             _ => I64, // Default fallback
+        }
+    }
+
+    fn expect_signedness_match(&self, left: &Type, right: &Type) {
+        if left.is_signed() != right.is_signed() {
+            panic!(
+                "Cannot mix signed and unsigned types: {:?} and {:?}",
+                left, right
+            );
         }
     }
 }

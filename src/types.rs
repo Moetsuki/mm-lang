@@ -21,6 +21,23 @@ pub enum Type {
     ToBeEvaluated,
 }
 
+impl Type {
+    pub fn is_signed(&self) -> bool {
+        matches!(
+            self,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64
+        )
+    }
+
+    pub fn is_unsigned(&self) -> bool {
+        matches!(self, Type::U8 | Type::U16 | Type::U32 | Type::U64)
+    }
+
+    pub fn is_floating(&self) -> bool {
+        matches!(self, Type::F32 | Type::F64)
+    }
+}
+
 impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let fmtstr = match self {

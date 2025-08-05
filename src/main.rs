@@ -163,3 +163,20 @@ fn test_coercion() {
     "#;
     process(source);
 }
+
+#[test]
+fn test_unary_op() {
+    let source = r#"
+    x: i64 = -5;
+    y: i64 = - x + 2;
+    "#;
+    process(source);
+}
+
+#[test]
+fn test_unary_op_const() {
+    let source = r#"
+    x: i64 = - ( - 4 - 2 );
+    "#;
+    process(source);
+}
