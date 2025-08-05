@@ -90,7 +90,7 @@ impl Scope {
         if let Some(global_scope) = self.stack.first() {
             for var in global_scope.symbols.values() {
                 if var.name == name {
-                    if let Type::Function(_, _) = var.var_type {
+                    if let Type::Function { .. } = var.var_type {
                         return Some(var);
                     }
                 }
@@ -259,6 +259,7 @@ impl LLVM {
             Type::F64 => "double".to_string(),
             Type::String => "i8*".to_string(),
             Type::NoneType => "void".to_string(),
+            Type::Pointer(inner_type) => format!("{}*", self.type_to_llvm(inner_type)),
             _ => "i32".to_string(), // Default fallback
         }
     }
@@ -532,10 +533,11 @@ impl LLVM {
                     // Register function in global scope
                     let var_info = Variable {
                         name: name.clone(),
-                        var_type: Type::Function(
-                            params.iter().map(|p| p.var_type.clone()).collect(),
-                            Box::new(ret_type.clone()),
-                        ),
+                        var_type: Type::Function {
+                            args: params.iter().map(|p| p.var_type.clone()).collect(),
+                            ret_type: Box::new(ret_type.clone()),
+                            is_variadic: false,
+                        },
                     };
                     let func_register = Register::new(ret_type.clone());
                     self.scope.insert_top(func_register, var_info);
@@ -553,10 +555,14 @@ impl LLVM {
                         func_name
                     ));
 
-                    let (param_types, return_type) = match &func_var.var_type {
-                        Type::Function(params, ret) => (params.clone(), ret.as_ref().clone()),
-                        _ => panic!("Variable '{}' is not a function", func_name),
+                    let param_types = if let Type::Function { args, .. } = &func_var.var_type {
+                        args.clone()
+                    } else {
+                        panic!("Expected function type for '{}'", func_name);
                     };
+
+                    // Generate function signature
+                    let signature = self.generate_function_signature(func_var.name.clone(), &func_var.var_type.clone(), false);
 
                     // Handle function call arguments
                     let mut arg_evals = Vec::new();
@@ -571,9 +577,6 @@ impl LLVM {
                         arg_evals.push(arg_eval);
                     }
 
-                    // Get LLVM return type
-                    let return_type_llvm = self.type_to_llvm(&return_type);
-
                     // Generate function call with proper types
                     let args_str = arg_evals
                         .iter()
@@ -587,12 +590,11 @@ impl LLVM {
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
-
+                    
                     eval.epilogue.push(format!(
-                        "%{} = call {} @{}({})",
+                        "%{} = call {}({})",
                         eval.register.to_string(),
-                        return_type_llvm,
-                        func_name,
+                        signature,
                         args_str
                     ));
                 }
@@ -663,7 +665,7 @@ impl LLVM {
 
                 // %msg = getelementptr [6 x i8], [6 x i8]* @.str, i64 0, i64 0
                 eval.epilogue.push(format!(
-                    "%{} = getelementptr [{} x i8], [{} x i8]* @.{}, i64 0, i64 0",
+                    "%{} = getelementptr [{} x i8], [{} x i8]* @.{}, i32 0, i32 0",
                     eval.register.to_string(),
                     string_data.length() + 1,
                     string_data.length() + 1,
@@ -1123,6 +1125,33 @@ impl LLVM {
         }
     }
 
+    fn generate_function_signature(&self, func_name: String, function: &Type, no_args: bool) -> String {
+        if let Type::Function { args, ret_type, is_variadic } = function {
+            let return_type = self.type_to_llvm(ret_type);
+            let params = args
+                .iter()
+                .map(|arg_type| format!("{}", self.type_to_llvm(arg_type)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let variadic_str = if *is_variadic {
+                if params.is_empty() {
+                    String::from("")
+                } else {
+                    format!("({}, ...) ", params)
+                }
+            } else {
+                params.clone()
+            };
+            if !no_args {
+                format!("{} {}@{}", return_type, variadic_str, func_name)
+            } else {
+                format!("{} {}@{}({})", return_type, variadic_str, func_name, params)
+            }
+        } else {
+            panic!("generate_function_signature called with non-function type");
+        }
+    }
+
     fn generate_c_bindings(&mut self) {
         self.prologue.push("\n; C Bindings".to_string());
         self.prologue.push("declare i32 @printf(i8*, ...)   ;".to_string());
@@ -1130,7 +1159,11 @@ impl LLVM {
             Register::new(Type::I32),
             Variable {
                 name: "printf".to_string(),
-                var_type: Type::Function(vec![Type::String], Box::new(Type::I32)),
+                var_type: Type::Function {
+                    args: vec![Type::String],
+                    ret_type: Box::new(Type::I32),
+                    is_variadic: true,
+                },
             },
         );
         self.prologue.push("declare i32 @scanf(i8*, ...)   ;".to_string());
@@ -1138,7 +1171,11 @@ impl LLVM {
             Register::new(Type::I32),
             Variable {
                 name: "scanf".to_string(),
-                var_type: Type::Function(vec![Type::String], Box::new(Type::I32)),
+                var_type: Type::Function {
+                    args: vec![Type::String],
+                    ret_type: Box::new(Type::I32),
+                    is_variadic: true,
+                },
             },
         );
         self.prologue.push("declare i8* @malloc(i64)  ;".to_string());
@@ -1146,7 +1183,11 @@ impl LLVM {
             Register::new(Type::Pointer(Box::new(Type::I8))),
             Variable {
                 name: "malloc".to_string(),
-                var_type: Type::Function(vec![Type::I64], Box::new(Type::Pointer(Box::new(Type::I8)))),
+                var_type: Type::Function {
+                    args: vec![Type::I64],
+                    ret_type: Box::new(Type::Pointer(Box::new(Type::I8))),
+                    is_variadic: false,
+                },
             },
         );
         self.prologue.push("declare void @free(i8*)  ;".to_string());
@@ -1154,7 +1195,11 @@ impl LLVM {
             Register::new(Type::NoneType),
             Variable {
                 name: "free".to_string(),
-                var_type: Type::Function(vec![Type::Pointer(Box::new(Type::I8))], Box::new(Type::NoneType)),
+                var_type: Type::Function {
+                    args: vec![Type::Pointer(Box::new(Type::I8))],
+                    ret_type: Box::new(Type::NoneType),
+                    is_variadic: false,
+                },
             },
         );
     }

@@ -15,7 +15,11 @@ pub enum Type {
     F64,
     String,
     NoneType,
-    Function(Vec<Type>, Box<Type>),
+    Function {
+        args: Vec<Type>, 
+        ret_type: Box<Type>,
+        is_variadic: bool,
+    },
     Array(Box<Type>),
     UserType(String),
     Pointer(Box<Type>),
@@ -55,15 +59,20 @@ impl Display for Type {
             Type::F64 => "f64".to_string(),
             Type::String => "string".to_string(),
             Type::NoneType => "none".to_string(),
-            Type::Function(params, ret) => format!(
-                "function ({}) -> {}",
-                params
+            Type::Function { args, ret_type, is_variadic } => {
+                let params_str = args
                     .iter()
                     .map(|t| t.to_string())
                     .collect::<Vec<_>>()
-                    .join(", "),
-                ret.to_string()
-            ),
+                    .join(", ");
+                let variadic_str = if *is_variadic { ", ..." } else { "" };
+                format!(
+                    "function ({}{}) -> {}",
+                    params_str,
+                    variadic_str,
+                    ret_type.to_string()
+                )
+            },
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
             Type::Pointer(inner_type) => format!("ptr<{}>", inner_type.to_string()),
             Type::UserType(name) => name.clone(),
@@ -120,9 +129,9 @@ impl Hash for Type {
             Type::F64 => "f64".hash(state),
             Type::String => "string".hash(state),
             Type::NoneType => "none".hash(state),
-            Type::Function(params, ret) => {
-                params.hash(state);
-                ret.hash(state);
+            Type::Function { args, ret_type, .. } => {
+                args.hash(state);
+                ret_type.hash(state);
             }
             Type::Array(elem_type) => elem_type.hash(state),
             Type::Pointer(inner_type) => {
