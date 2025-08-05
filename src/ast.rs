@@ -106,7 +106,7 @@ impl Ast {
                                         Token::Identifier(type_name) => {
                                             var_info.var_type = Type::from_str(type_name).unwrap_or(Type::ToBeEvaluated);
                                             self.next_token(); // consume the type identifiers
-                                            self.expect_operator();
+                                            self.expect_operator(); // consume the = sign
                                             let expr = self.parse_expr();
                                             statements.push(Statement::VariableDecl {
                                                 identifier: var_info,
@@ -345,6 +345,28 @@ impl Ast {
                     let value = *n;
                     self.next_token();
                     Expression::Number(value)
+                }
+                Token::Operator(p) if p == "-" => {
+                    self.next_token(); // consume the unary minus operator
+                    let next_tok = self.peek_token();
+                    if let Some(next_tok) = next_tok {
+                        match &next_tok.token {
+                            Token::Number(n) => {
+                                let result = Expression::Number(-(*n));
+                                self.next_token(); // consume the number
+                                result
+                            }
+                            _ => {
+                                let operand = self.parse_factor();
+                                Expression::UnaryOp {
+                                    op: "-".to_string(),
+                                    expr: Box::new(operand),
+                                }
+                            },
+                        }
+                    } else {
+                        panic!("Unexpected end of input after unary minus");
+                    }
                 }
                 Token::StringLiteral(s) => {
                     let value = s.clone();
