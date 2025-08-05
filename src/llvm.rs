@@ -268,6 +268,10 @@ impl LLVM {
         self.prologue
             .push(format!("; LLVM IR generated from MM-lang\n"));
 
+        self.scope.enter_scope(); // Enter binding scope
+        
+        self.generate_c_bindings();
+
         self.main_prologue.push(format!("\n; MAIN PROLOGUE"));
         //self.main_prologue.push(format!("@main = global i32 0"));
         self.main_prologue.push(format!("define i32 @main() {{"));
@@ -280,6 +284,8 @@ impl LLVM {
         self.main_epilogue.push(format!("\n; MAIN EPILOGUE"));
         self.main_epilogue.push(format!("  ret i32 0"));
         self.main_epilogue.push(format!("}}"));
+
+        self.scope.exit_scope(); // Exit binding scope
     }
 
     pub fn output(&self) -> String {
@@ -1115,5 +1121,41 @@ impl LLVM {
                 left, right
             );
         }
+    }
+
+    fn generate_c_bindings(&mut self) {
+        self.prologue.push("\n; C Bindings".to_string());
+        self.prologue.push("declare i32 @printf(i8*, ...)   ;".to_string());
+        self.scope.insert_top(
+            Register::new(Type::I32),
+            Variable {
+                name: "printf".to_string(),
+                var_type: Type::Function(vec![Type::String], Box::new(Type::I32)),
+            },
+        );
+        self.prologue.push("declare i32 @scanf(i8*, ...)   ;".to_string());
+        self.scope.insert_top(
+            Register::new(Type::I32),
+            Variable {
+                name: "scanf".to_string(),
+                var_type: Type::Function(vec![Type::String], Box::new(Type::I32)),
+            },
+        );
+        self.prologue.push("declare i8* @malloc(i64)  ;".to_string());
+        self.scope.insert_top(
+            Register::new(Type::Pointer(Box::new(Type::I8))),
+            Variable {
+                name: "malloc".to_string(),
+                var_type: Type::Function(vec![Type::I64], Box::new(Type::Pointer(Box::new(Type::I8)))),
+            },
+        );
+        self.prologue.push("declare void @free(i8*)  ;".to_string());
+        self.scope.insert_top(
+            Register::new(Type::NoneType),
+            Variable {
+                name: "free".to_string(),
+                var_type: Type::Function(vec![Type::Pointer(Box::new(Type::I8))], Box::new(Type::NoneType)),
+            },
+        );
     }
 }

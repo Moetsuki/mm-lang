@@ -180,3 +180,12 @@ fn test_unary_op_const() {
     "#;
     process(source);
 }
+
+#[test]
+fn test_printf() {
+    let source = r#"
+    str: string = "Hello, World!";
+    printf(str);
+    "#;
+    process(source);
+}

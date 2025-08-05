@@ -18,6 +18,7 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Array(Box<Type>),
     UserType(String),
+    Pointer(Box<Type>),
     ToBeEvaluated,
 }
 
@@ -64,6 +65,7 @@ impl Display for Type {
                 ret.to_string()
             ),
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
+            Type::Pointer(inner_type) => format!("ptr<{}>", inner_type.to_string()),
             Type::UserType(name) => name.clone(),
             Type::ToBeEvaluated => "TBE".to_string(),
         };
@@ -89,7 +91,15 @@ impl FromStr for Type {
             "f64" => Ok(Type::F64),
             "string" => Ok(Type::String),
             "none" => Ok(Type::NoneType),
-            _ => Err(()),
+            _ => {
+                if s.starts_with("ptr<") && s.ends_with('>') {
+                    let inner_type_str = &s[8..s.len() - 1];
+                    let inner_type = Type::from_str(inner_type_str)?;
+                    return Ok(Type::Pointer(Box::new(inner_type)));
+                } else {
+                    Err(())
+                }
+            },
         }
     }
 }
@@ -115,6 +125,11 @@ impl Hash for Type {
                 ret.hash(state);
             }
             Type::Array(elem_type) => elem_type.hash(state),
+            Type::Pointer(inner_type) => {
+                "ptr<".hash(state);
+                inner_type.hash(state);
+                ">".hash(state);
+            }
             Type::UserType(name) => name.hash(state),
             Type::ToBeEvaluated => "TBE".hash(state),
         }
