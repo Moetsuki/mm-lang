@@ -14,30 +14,71 @@ use statement::Statement;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use tokenizer::tokenize;
+use std::backtrace::Backtrace;
 
-fn process(source: &str) {
+fn get_caller_name() -> Option<String> {
+    let bt = Backtrace::capture();
+
+    let bt_str = bt.to_string();
+    
+    let mut lines = bt_str.lines();
+
+    let mut caller = String::from("");
+
+    let mut skip_lines = 2; // Skip the first two lines which are the backtrace header and the current function
+    while let (Some(line1), Some(line2)) = (lines.next(), lines.next()) {
+        if line2.starts_with("             at /rustc/") {
+            // This is a Rust function, skip it
+            continue;
+        }
+        if skip_lines > 0 {
+            skip_lines -= 1;
+            continue;
+        }
+        //println!("({})-({})", line1, line2);
+
+        caller = line1.to_string();
+
+        break;
+    }
+
+    // Find the last :: in the caller string and extract from that to the end
+    if let Some(last_colon) = caller.rfind("::") {
+        return Some(caller[last_colon + 2..].to_string());
+    }
+        
+    None
+}
+
+fn process(source: &str, expected: Option<String>) {
     let mut tokens = tokenize(source);
 
-    for token in &tokens {
-        println!("{:?}", token);
-    }
+    let caller = get_caller_name().unwrap_or_else(|| "unknown".to_string());
+    println!("Processing source code from: {}", caller);
+
+    let outfile = "build/output_".to_string() + &caller;
+    let outfile_invoke = "./".to_string() + &outfile;
+
+    // for token in &tokens {
+    //     println!("{:?}", token);
+    // }
 
     let mut ast = Ast::new(tokens);
 
     let block = ast.parse();
 
-    print_block(&block, 0);
+    // print_block(&block, 0);
 
     let mut llvm = llvm::LLVM::new(ast);
 
     llvm.compile();
 
     let ir_output = llvm.output();
-    println!("{}", ir_output);
+    // println!("{}", ir_output);
 
     // Compile LLVM IR via stdin
     let mut clang = Command::new("clang")
-        .args(&["-x", "ir", "-", "-o", "build/output"]) // -x ir tells clang it's LLVM IR, - means stdin
+        .args(&["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -60,16 +101,29 @@ fn process(source: &str) {
         println!("Compilation successful!");
 
         // Run the executable
-        let run_output = Command::new("./build/output")
+        let run_output = Command::new(&outfile_invoke)
             .output()
             .expect("Failed to run executable");
 
+        let std_out = String::from_utf8_lossy(&run_output.stdout);
+
+        let exit_code = run_output.status.code().unwrap_or(-1);
+
+        let std_err = String::from_utf8_lossy(&run_output.stderr);
+
         println!("Program output:");
-        println!("stdout: {}", String::from_utf8_lossy(&run_output.stdout));
+        println!("stdout: {}", &std_out);
         if !run_output.stderr.is_empty() {
-            println!("stderr: {}", String::from_utf8_lossy(&run_output.stderr));
+            println!("stderr: {}", &std_err);
         }
-        println!("Exit code: {}", run_output.status.code().unwrap_or(-1));
+        println!("Exit code: {}", &exit_code);
+
+        assert_eq!(exit_code, 0, "Program did not exit successfully");
+        assert_eq!(std_err.is_empty(), true, "Program produced stderr output");
+        if let Some(expected_output) = expected {
+            assert_eq!(std_out.trim(), expected_output.trim(), "Program output did not match expected output");
+        }
+
     } else {
         println!("Compilation failed:");
         println!("{}", String::from_utf8_lossy(&output.stderr));
@@ -121,13 +175,13 @@ fn main() {
         return x + y;
     }
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
 fn test_assignment() {
     let source = "x: i64 = 5; y: i64 = 10;";
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -137,7 +191,7 @@ fn test_function() {
         return a + b;
     }
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -150,7 +204,7 @@ fn test_if_statement() {
         y: i64 = 30;
     }
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -164,7 +218,7 @@ fn test_block() {
         }
     }
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -173,7 +227,7 @@ fn test_variable_declaration() {
     x: i64 = 42;
     y: i64 = 100;
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -184,7 +238,7 @@ fn test_function_call() {
     }
     result: i64 = foo(10);
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -194,7 +248,7 @@ fn test_casting() {
     y: i32 = x as i32;
     z: i64 = x + y;
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -204,7 +258,7 @@ fn test_coercion() {
     y: i8 = 10;
     z: i64 = x + y; // Implicit coercion from i32 to i64
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -213,7 +267,7 @@ fn test_unary_op() {
     x: i64 = -5;
     y: i64 = - x + 2;
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -221,7 +275,7 @@ fn test_unary_op_const() {
     let source = r#"
     x: i64 = - ( - 4 - 2 );
     "#;
-    process(source);
+    process(source, None);
 }
 
 #[test]
@@ -230,5 +284,5 @@ fn test_printf() {
     str: string = "Hello, World!";
     printf(str);
     "#;
-    process(source);
+    process(source, None);
 }
