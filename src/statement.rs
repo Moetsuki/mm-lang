@@ -6,6 +6,13 @@ use crate::types::Type;
 
 use std::fmt::Display;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Visibility {
+    Public,
+    Private,
+    Protected,
+}
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     VariableDecl {
@@ -37,6 +44,12 @@ pub enum Statement {
     Return {
         value: Expression,
     },
+    Class {
+        name: String,
+        parent: Option<String>,
+        fields: Vec<(Variable, Visibility)>,
+        methods: Vec<(Box<Statement>, Visibility)>,
+    }
 }
 
 impl Display for Statement {
@@ -78,6 +91,17 @@ impl Display for Statement {
             ),
             Statement::Block { body } => format!("Block({})", body),
             Statement::Return { value } => format!("Return({})", value),
+            Statement::Class { name, parent, fields, methods } => {
+                let fields_str = fields.iter()
+                    .map(|(var, vis)| format!("{}: {} ({:?})", var.name, var.var_type, vis))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let methods_str = methods.iter()
+                    .map(|method| format!("{} ({:?})", method.0.to_string(), method.1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Class(name: {}, parent: {:?}, fields: [{}], methods: [{}])", name, parent, fields_str, methods_str)
+            }
         };
         write!(f, "{}", fmtstr)
     }

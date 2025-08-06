@@ -65,9 +65,9 @@ fn process(source: &str, expected: Option<String>) {
 
     let mut ast = Ast::new(tokens);
 
-    let block = ast.parse();
+    let _block = ast.parse();
 
-    // print_block(&block, 0);
+    print_block(&_block, 0);
 
     let mut llvm = llvm::LLVM::new(ast);
 
@@ -283,6 +283,29 @@ fn test_printf() {
     let source = r#"
     str: string = "Hello, World!";
     printf(str);
+    "#;
+    process(source, None);
+}
+
+#[test]
+fn test_class() {
+    let source = r#"
+    class Animal {
+        private name: string;
+        private age: i32;
+
+        public function speak() -> string {
+            return "Animal sound";
+        }
+    };
+
+    class Dog : Animal {
+        public breed: string;
+
+        public function speak() -> string {
+            return "Woof!";
+        }
+    };
     "#;
     process(source, None);
 }

@@ -1,6 +1,7 @@
 use crate::block::Block;
 use crate::expression::Expression;
 use crate::statement::Statement;
+use crate::statement::Visibility;
 use crate::tokenizer::LexicalToken;
 use crate::tokenizer::OPERATORS;
 use crate::tokenizer::Token;
@@ -104,7 +105,8 @@ impl Ast {
                                 if let Some(type_token) = self.peek_token() {
                                     match &type_token.token {
                                         Token::Identifier(type_name) => {
-                                            var_info.var_type = Type::from_str(type_name).unwrap_or(Type::ToBeEvaluated);
+                                            var_info.var_type = Type::from_str(type_name)
+                                                .unwrap_or(Type::ToBeEvaluated);
                                             self.next_token(); // consume the type identifiers
                                             self.expect_operator(); // consume the = sign
                                             let expr = self.parse_expr();
@@ -188,64 +190,8 @@ impl Ast {
                     });
                 }
                 Token::Keyword(keyword) if keyword == "function" => {
-                    let name = if let Some(lexical_token) = self.next_token() {
-                        if let Token::Identifier(name) = &lexical_token.token {
-                            name.clone()
-                        } else {
-                            panic!(
-                                "Expected function name, found {:?} at line {}, column {}",
-                                lexical_token.token, lexical_token.line, lexical_token.column
-                            );
-                        }
-                    } else {
-                        panic!("Expected function name, but no more tokens available");
-                    };
-                    self.expect(&Token::Punctuation("(".to_string()));
-                    let mut params = Vec::new();
-                    loop {
-                        if let Some(lexical_token) = self.peek_token() {
-                            if let Token::Identifier(param_name) = &lexical_token.token {
-                                let param_name = param_name.clone(); // Clone the name
-                                self.next_token(); // consume the identifier
-                                self.expect(&Token::Punctuation(":".to_string()));
-                                let param_type = self.parse_type();
-                                params.push(Variable {
-                                    name: param_name,
-                                    var_type: param_type,
-                                });
-                                if let Some(next_token) = self.peek_token() {
-                                    if next_token.token == Token::Punctuation(",".to_string()) {
-                                        self.next_token(); // consume ','
-                                    } else {
-                                        break;
-                                    }
-                                } else {
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    self.expect(&Token::Punctuation(")".to_string()));
-
-                    let mut ret_type: Type;
-                    if let Some(arrow_token) = self.peek_token() {
-                        if arrow_token.token == Token::Punctuation("->".to_string()) {
-                            self.next_token(); // consume '->'
-                            ret_type = self.parse_type();
-                        } else {
-                            ret_type = Type::NoneType;
-                        }
-                        } else {
-                        ret_type = Type::NoneType;
-                    }
-                    self.expect(&Token::Punctuation("{".to_string()));
-                    let body = self.parse();
-                    self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-                    statements.push(Statement::Function { name, ret_type, params, body });
+                    let stm = self.parse_function();
+                    statements.push(stm);
                 }
                 Token::Keyword(keyword) if keyword == "return" => {
                     //
@@ -253,6 +199,127 @@ impl Ast {
                     //
                     let expr = self.parse_expr();
                     statements.push(Statement::Return { value: expr });
+                }
+                Token::Keyword(keyword) if keyword == "class" => {
+                    //
+                    // Handle class definitions
+                    //
+                    let class_name = if let Some(lexical_token) = self.next_token() {
+                        if let Token::Identifier(name) = &lexical_token.token {
+                            name.clone()
+                        } else {
+                            panic!(
+                                "Expected class name, found {:?} at line {}, column {}",
+                                lexical_token.token, lexical_token.line, lexical_token.column
+                            );
+                        }
+                    } else {
+                        panic!("Expected class name, but no more tokens available");
+                    };
+
+                    //
+                    // Check if we have a parent class
+                    //
+                    let parent_class: Option<String> = if let Some(colon_token) = self.peek_token()
+                    {
+                        if colon_token.token == Token::Punctuation(":".to_string()) {
+                            self.next_token(); // consume ':'
+
+                            // Next token should be the parent class identifier
+                            if let Some(parent_token) = self.next_token() {
+                                if let Token::Identifier(parent_name) = &parent_token.token {
+                                    Some(parent_name.clone())
+                                } else {
+                                    panic!(
+                                        "Expected parent class name, found {:?} at line {}, column {}",
+                                        parent_token.token, parent_token.line, parent_token.column
+                                    );
+                                }
+                            } else {
+                                panic!("Expected parent class name, but no more tokens available");
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    //
+                    // Consume the opening brace for the class body
+                    //
+
+                    self.expect(&Token::Punctuation("{".to_string()));
+
+                    let mut fields = Vec::new();
+                    let mut methods = Vec::new();
+
+                    // Each field or method must be prefixed with a visibility keyword
+                    while let Some(class_token) = self.peek_token() {
+                        println!("Parsing class token: {:?}", class_token.token);
+                        match &class_token.token {
+                            Token::Keyword(vis) if vis == "public" || vis == "private" || vis == "protected" => {
+                                let visibility = match vis.as_str() {
+                                    "public" => Visibility::Public,
+                                    "private" => Visibility::Private,
+                                    "protected" => Visibility::Protected,
+                                    _ => unreachable!(),
+                                };
+                                self.next_token(); // consume the visibility keyword
+
+                                if let Some(field_token) = self.peek_token() {
+                                    match &field_token.token {
+                                        Token::Identifier(field_name) => {
+                                            // Extract field before mutable borrow on self
+                                            let field_name = field_name.clone();
+                                            self.next_token(); // consume the identifier
+                                            self.expect(&Token::Punctuation(":".to_string()));
+                                            let field_type = self.parse_type();
+                                            fields.push((
+                                                Variable {
+                                                    name: field_name,
+                                                    var_type: field_type,
+                                                },
+                                                visibility,
+                                            ));
+                                            self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
+                                        }
+                                        Token::Keyword(method_keyword) if method_keyword == "function" => {
+                                            // Handle method declaration
+                                            self.next_token(); // consume 'function'
+                                            let method = self.parse_function();
+                                            methods.push((Box::new(method), visibility));
+                                        }
+                                        _ => {
+                                            panic!("Expected a field or method after visibility keyword");
+                                        }
+                                    }
+                                } else {
+                                    panic!("Expected a field or method after visibility keyword");
+                                }
+
+                            }
+                            Token::Newline => {
+                                // Ignore newlines
+                                self.next_token(); // consume the newline
+                            }
+                            _ => {
+                                // Any other keyword other than a visibility keyword means we are done with the class definition
+                                break;
+                            }
+                        }
+                    }
+
+                    self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+                    statements.push(Statement::Class {
+                        name: class_name,
+                        parent: parent_class,
+                        fields,
+                        methods,
+                    });
+
+                    self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
                 }
                 Token::Newline => {
                     //
@@ -362,7 +429,7 @@ impl Ast {
                                     op: "-".to_string(),
                                     expr: Box::new(operand),
                                 }
-                            },
+                            }
                         }
                     } else {
                         panic!("Unexpected end of input after unary minus");
@@ -374,11 +441,11 @@ impl Ast {
                     Expression::StringLiteral(value)
                 }
                 Token::Identifier(name) => {
-                    let name_clone = name.clone(); 
+                    let name_clone = name.clone();
                     self.next_token();
                     Expression::Variable(Variable {
                         name: name_clone,
-                        var_type: Type::ToBeEvaluated
+                        var_type: Type::ToBeEvaluated,
                     })
                 }
                 Token::Punctuation(p) if p == "(" => {
@@ -492,5 +559,73 @@ impl Ast {
         }
 
         expr
+    }
+
+    // Parses a function definition
+    fn parse_function(&mut self) -> Statement {
+        let name = if let Some(lexical_token) = self.next_token() {
+            if let Token::Identifier(name) = &lexical_token.token {
+                name.clone()
+            } else {
+                panic!(
+                    "Expected function name, found {:?} at line {}, column {}",
+                    lexical_token.token, lexical_token.line, lexical_token.column
+                );
+            }
+        } else {
+            panic!("Expected function name, but no more tokens available");
+        };
+        self.expect(&Token::Punctuation("(".to_string()));
+        let mut params = Vec::new();
+        loop {
+            if let Some(lexical_token) = self.peek_token() {
+                if let Token::Identifier(param_name) = &lexical_token.token {
+                    let param_name = param_name.clone(); // Clone the name
+                    self.next_token(); // consume the identifier
+                    self.expect(&Token::Punctuation(":".to_string()));
+                    let param_type = self.parse_type();
+                    params.push(Variable {
+                        name: param_name,
+                        var_type: param_type,
+                    });
+                    if let Some(next_token) = self.peek_token() {
+                        if next_token.token == Token::Punctuation(",".to_string()) {
+                            self.next_token(); // consume ','
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::Punctuation(")".to_string()));
+
+        let mut ret_type: Type;
+        if let Some(arrow_token) = self.peek_token() {
+            if arrow_token.token == Token::Punctuation("->".to_string()) {
+                self.next_token(); // consume '->'
+                ret_type = self.parse_type();
+            } else {
+                ret_type = Type::NoneType;
+            }
+        } else {
+            ret_type = Type::NoneType;
+        }
+        self.expect(&Token::Punctuation("{".to_string()));
+        let body = self.parse();
+        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+        Statement::Function {
+            name,
+            ret_type,
+            params,
+            body,
+        }
     }
 }

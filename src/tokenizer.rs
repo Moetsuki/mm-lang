@@ -6,7 +6,12 @@ pub const OPERATORS: [&str; 12] = [
     "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=",
 ];
 
-pub const KEYWORDS: [&str; 7] = ["if", "else", "while", "for", "function", "return", "as"];
+pub const KEYWORDS: [&str; 17] = [
+    "if", "else", "while", "for", "function", "return", "as", 
+    "object", "class", "entity", "component", "system", 
+    "static", "dynamic", 
+    "public", "private", "protected"
+];
 
 #[derive(Debug)]
 pub struct LexicalToken {
