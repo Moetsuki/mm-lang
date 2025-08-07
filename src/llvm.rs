@@ -181,6 +181,59 @@ impl ToString for Register {
 }
 
 ///
+/// Classes and Structs
+/// 
+#[derive(Debug, Clone)]
+pub struct Class {
+    pub id: u64,
+    pub name: String,
+    pub parent: Option<Box<Class>>,
+    pub statement: Statement,
+}
+
+static CLASS_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl Class {
+    pub fn new(name: String, parent: Option<Box<Class>>, class_stm: Statement) -> Self {
+        let id = CLASS_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Class { id, name, parent, statement: class_stm }
+    }
+
+    pub fn undecorated_name(&self) -> String {
+        format!("class{}", self.id)
+    }
+
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub id: u64,
+    pub name: String,
+    pub parent: Option<Box<Struct>>,
+    pub statement: Statement
+}
+
+impl Struct {
+    pub fn new(name: String, parent: Option<Box<Struct>>, struct_stm: Statement) -> Self {
+        let id = STRUCT_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Struct { id, name, parent, statement: struct_stm }
+    }
+
+    pub fn undecorated_name(&self) -> String {
+        format!("struct{}", self.id)
+    }
+
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+static STRUCT_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+///
 /// Strings
 ///
 static STRING_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -228,6 +281,8 @@ pub struct LLVM {
     epilogue: IR,
     ast: Ast,
     scope: Scope,
+    class_definitions: HashMap<String, Class>,
+    struct_definitions: HashMap<String, Struct>,
 }
 
 impl LLVM {
@@ -241,6 +296,8 @@ impl LLVM {
             code: IR::new(),
             ast,
             scope: Scope::new(),
+            class_definitions: HashMap::new(),
+            struct_definitions: HashMap::new(),
         }
     }
 
@@ -620,7 +677,7 @@ impl LLVM {
                         return_eval.register.to_string()
                     ));
                 }
-                Statement::Class { name: _name, parent: _parent, fields: _fields, methods: _methods } => {
+                Statement::Class { name, parent, fields, methods } => {
                     //
                     // Handle class transformation
                     //
@@ -662,7 +719,7 @@ impl LLVM {
                     // COMPILES:
                     //
                     // ; Type definitions
-                    // %AnimalVTable = type { i8* (%Animal*)* }
+                    // %AnimalVTable = type { i8* (%Animal*)* } // Forward declare %Animal
                     // %Animal = type { %AnimalVTable*, i8*, i32 }       ; vtable*, name, age
                     // %Dog    = type { %AnimalVTable*, i8*, i32, i8* }   ; vtable*, name, age, breed
                     // 
@@ -683,6 +740,70 @@ impl LLVM {
                     // define i8* @Dog_speak(%Animal* %this) {
                     //    ...
                     // }
+
+                    // Check if class already exists by name
+                    if self.class_definitions.contains_key(name) {
+                        panic!("Class '{}' already defined", name);
+                    }
+
+                    // If we have a parent, fetch it from the definitions
+                    let parent_class = if let Some(parent_name) = parent {
+                        self.class_definitions
+                            .get(parent_name)
+                            .map(|c| Box::new(c.clone()))
+                            .or_else(|| {
+                                panic!(
+                                    "Parent class '{}' not found for class '{}'",
+                                    parent_name, name
+                                )
+                            })
+                    } else {
+                        None
+                    };
+
+                    // Create a new class definition
+                    let class_def = Class::new(
+                        name.clone(),
+                        parent_class,
+                        statement.clone()
+                    );
+
+                    // Generate the class VTable
+                    // This is a forward declaration of the class type
+                    // TODO: this is incomplete
+                    let vt_content = methods.iter().map(|(method, _)| {
+                        let method_name = match method.as_ref() {
+                            Statement::Function { name, .. } => name.clone(),
+                            _ => panic!("Expected function statement for class method"),
+                        };
+                        format!("i8* (%{})*", class_def.name())
+                    }).collect::<Vec<_>>().join(", ");
+
+                    // Forward declare the class type
+                    // %AnimalVTable = type { i8* (%Animal*)* }
+                    // TODO: this is wrong, we need to generate a proper VTable from method signatures
+                    self.prologue.push(format!(
+                        "%{}VTable = type {{ i8* (%{})* }}",
+                        class_def.name(),
+                        class_def.name()
+                    ));
+
+                    // Define the class type
+                    // %Animal = type { %AnimalVTable*, field_type1, field_type2, ... }
+                    // TODO: also incomplete, we need to add all fields
+                    self.prologue.push(format!(
+                        "%{} = type {{ %{}VTable*, {} }}",
+                        class_def.name(),
+                        class_def.name(),
+                        fields.iter().map(|(f,_)| self.type_to_llvm(&f.var_type)).collect::<Vec<_>>().join(", ")
+                    ));
+
+
+
+                    // Insert the class definition into the class definitions
+                    self.class_definitions
+                        .insert(name.clone(), class_def.clone());
+
                 }
                 _ => {
                     panic!(

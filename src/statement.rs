@@ -13,24 +13,6 @@ pub enum Visibility {
     Protected,
 }
 
-impl Display for Visibility {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fmtstr = match self {
-            Visibility::Public => "public".to_string(),
-            Visibility::Private => "private".to_string(),
-            Visibility::Protected => "protected".to_string(),
-        };
-        write!(f, "{}", fmtstr)
-    }
-}
-
-// Implement Hash for Visibility if not already derived
-impl std::hash::Hash for Visibility {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Statement {
     VariableDecl {
@@ -67,7 +49,13 @@ pub enum Statement {
         parent: Option<String>,
         fields: Vec<(Variable, Visibility)>,
         methods: Vec<(Box<Statement>, Visibility)>,
-    }
+    },
+    Struct {
+        id: u64,
+        name: String,
+        parent: Option<Box<Statement>>,
+        fields: Vec<Variable>,
+    },
 }
 
 impl Display for Statement {
@@ -120,7 +108,37 @@ impl Display for Statement {
                     .join(", ");
                 format!("Class(name: {}, parent: {:?}, fields: [{}], methods: [{}])", name, parent, fields_str, methods_str)
             }
+            Statement::Struct { id, name, parent, fields } => {
+                let parent_str = if let Some(p) = parent {
+                    format!(" extends {}", p)
+                } else {
+                    String::new()
+                };
+                let fields_str = fields.iter()
+                    .map(|f| f.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Struct(id: {}, name: {}{}, fields: [{}])", id, name, parent_str, fields_str)
+            }
         };
         write!(f, "{}", fmtstr)
+    }
+}
+
+impl Display for Visibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = match self {
+            Visibility::Public => "public".to_string(),
+            Visibility::Private => "private".to_string(),
+            Visibility::Protected => "protected".to_string(),
+        };
+        write!(f, "{}", fmtstr)
+    }
+}
+
+// Implement Hash for Visibility if not already derived
+impl std::hash::Hash for Visibility {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
     }
 }

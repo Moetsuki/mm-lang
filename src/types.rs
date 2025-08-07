@@ -27,6 +27,10 @@ pub enum Type {
         fields: Vec<(Box<Type>, Visibility)>,
         methods: Vec<(Box<Type>, Visibility)>,
     },
+    Struct {
+        parent: Option<Box<Type>>,
+        fields: Vec<Box<Type>>,
+    },
     Array(Box<Type>),
     UserType(String),
     Pointer(Box<Type>),
@@ -101,6 +105,19 @@ impl Display for Type {
                     parent_str, fields_str, methods_str
                 )
             },
+            Type::Struct { parent, fields } => {
+                let parent_str = if let Some(p) = parent {
+                    format!(" extends {}", p)
+                } else {
+                    String::new()
+                };
+                let fields_str = fields
+                    .iter()
+                    .map(|field| field.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("struct{} {{ fields: [{}] }}", parent_str, fields_str)
+            },
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
             Type::Pointer(inner_type) => format!("ptr<{}>", inner_type.to_string()),
             Type::UserType(name) => name.clone(),
@@ -167,6 +184,12 @@ impl Hash for Type {
                 }
                 fields.hash(state);
                 methods.hash(state);
+            }
+            Type::Struct { parent, fields } => {
+                if let Some(p) = parent {
+                    p.hash(state);
+                }
+                fields.hash(state);
             }
             Type::Array(elem_type) => elem_type.hash(state),
             Type::Pointer(inner_type) => {
