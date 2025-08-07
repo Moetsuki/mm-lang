@@ -1,5 +1,6 @@
 use core::panic;
 
+use crate::statement;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
@@ -182,7 +183,7 @@ impl ToString for Register {
 
 ///
 /// Classes and Structs
-/// 
+///
 #[derive(Debug, Clone)]
 pub struct Class {
     pub id: u64,
@@ -196,7 +197,12 @@ static CLASS_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl Class {
     pub fn new(name: String, parent: Option<Box<Class>>, class_stm: Statement) -> Self {
         let id = CLASS_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        Class { id, name, parent, statement: class_stm }
+        Class {
+            id,
+            name,
+            parent,
+            statement: class_stm,
+        }
     }
 
     pub fn undecorated_name(&self) -> String {
@@ -213,13 +219,18 @@ pub struct Struct {
     pub id: u64,
     pub name: String,
     pub parent: Option<Box<Struct>>,
-    pub statement: Statement
+    pub statement: Statement,
 }
 
 impl Struct {
     pub fn new(name: String, parent: Option<Box<Struct>>, struct_stm: Statement) -> Self {
         let id = STRUCT_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        Struct { id, name, parent, statement: struct_stm }
+        Struct {
+            id,
+            name,
+            parent,
+            statement: struct_stm,
+        }
     }
 
     pub fn undecorated_name(&self) -> String {
@@ -327,7 +338,7 @@ impl LLVM {
             .push(format!("; LLVM IR generated from MM-lang\n"));
 
         self.scope.enter_scope(); // Enter binding scope
-        
+
         self.generate_c_bindings();
 
         self.main_prologue.push(format!("\n; MAIN PROLOGUE"));
@@ -472,7 +483,9 @@ impl LLVM {
 
                     // True block
                     eval.epilogue.push(format!("{}:", true_label));
-                    let then_eval = self.transform_block(&then_block.statements).expect("Failed to compile true-statements block");
+                    let then_eval = self
+                        .transform_block(&then_block.statements)
+                        .expect("Failed to compile true-statements block");
                     eval.epilogue
                         .instructions
                         .extend(then_eval.prologue.instructions);
@@ -484,7 +497,9 @@ impl LLVM {
                     // False block (if exists)
                     if let Some(else_block) = else_block {
                         eval.epilogue.push(format!("{}:", false_label));
-                        let else_eval = self.transform_block(&else_block.statements).expect("Failed to compile false-statements block");
+                        let else_eval = self
+                            .transform_block(&else_block.statements)
+                            .expect("Failed to compile false-statements block");
                         eval.epilogue
                             .instructions
                             .extend(else_eval.prologue.instructions);
@@ -545,7 +560,9 @@ impl LLVM {
                     }
 
                     // Transform function body
-                    let mut body_eval = self.transform_block(&body.statements).expect("Failed to compile function body");
+                    let mut body_eval = self
+                        .transform_block(&body.statements)
+                        .expect("Failed to compile function body");
 
                     // Check the body_eval register, if we don't have a match
                     // We need to fix the last instruction.
@@ -621,7 +638,12 @@ impl LLVM {
                     };
 
                     // Generate function signature
-                    let signature = self.generate_function_signature(func_var.name.clone(), &func_var.var_type.clone(), false);
+                    let signature = self.generate_function_signature(
+                        func_var.name.clone(),
+                        &func_var.var_type.clone(),
+                        false,
+                        false,
+                    );
 
                     // Handle function call arguments
                     let mut arg_evals = Vec::new();
@@ -649,7 +671,7 @@ impl LLVM {
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
-                    
+
                     eval.epilogue.push(format!(
                         "%{} = call {}({})",
                         eval.register.to_string(),
@@ -677,7 +699,12 @@ impl LLVM {
                         return_eval.register.to_string()
                     ));
                 }
-                Statement::Class { name, parent, fields, methods } => {
+                Statement::Class {
+                    name,
+                    parent,
+                    fields,
+                    methods,
+                } => {
                     //
                     // Handle class transformation
                     //
@@ -694,7 +721,7 @@ impl LLVM {
                     // 5. Implement a VTABLE for the class if it has methods
                     // 6. Pass `this` around explicitly in method calls
                     //
-                    
+
                     //
                     // EXAMPLE:
                     //
@@ -722,7 +749,7 @@ impl LLVM {
                     // %AnimalVTable = type { i8* (%Animal*)* } // Forward declare %Animal
                     // %Animal = type { %AnimalVTable*, i8*, i32 }       ; vtable*, name, age
                     // %Dog    = type { %AnimalVTable*, i8*, i32, i8* }   ; vtable*, name, age, breed
-                    // 
+                    //
                     // ; Declare the speak functions
                     // declare i8* @Animal_speak(%Animal*)
                     // declare i8* @Dog_speak(%Animal*)
@@ -762,30 +789,52 @@ impl LLVM {
                     };
 
                     // Create a new class definition
-                    let class_def = Class::new(
-                        name.clone(),
-                        parent_class,
-                        statement.clone()
-                    );
+                    let class_def = Class::new(name.clone(), parent_class, statement.clone());
 
                     // Generate the class VTable
                     // This is a forward declaration of the class type
                     // TODO: this is incomplete
-                    let vt_content = methods.iter().map(|(method, _)| {
-                        let method_name = match method.as_ref() {
-                            Statement::Function { name, .. } => name.clone(),
-                            _ => panic!("Expected function statement for class method"),
-                        };
-                        format!("i8* (%{})*", class_def.name())
-                    }).collect::<Vec<_>>().join(", ");
+                    let vt_content = methods
+                        .iter()
+                        .map(|(method, _)| {
+                            match method.as_ref() {
+                                Statement::Function {
+                                    name: _name,
+                                    ret_type,
+                                    params,
+                                    body: _body,
+                                } => {
+                                    let return_type = self.type_to_llvm(&ret_type);
+                                    if params.is_empty() {
+                                        format!("{} (%{}*)", return_type, class_def.name())
+                                    } else {
+                                        // For methods, we need to pass `this` as the first parameter
+                                        // followed by the rest of the parameters
+                                        let params_str = params
+                                            .iter()
+                                            .map(|p| self.type_to_llvm(&p.var_type))
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
+                                        format!(
+                                            "{} (%{}* {})",
+                                            return_type,
+                                            class_def.name(),
+                                            params_str
+                                        )
+                                    }
+                                }
+                                _ => panic!("Expected function statement for class method"),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
 
                     // Forward declare the class type
                     // %AnimalVTable = type { i8* (%Animal*)* }
-                    // TODO: this is wrong, we need to generate a proper VTable from method signatures
                     self.prologue.push(format!(
-                        "%{}VTable = type {{ i8* (%{})* }}",
+                        "%{}VTable = type {{ {} }}",
                         class_def.name(),
-                        class_def.name()
+                        vt_content
                     ));
 
                     // Define the class type
@@ -795,15 +844,16 @@ impl LLVM {
                         "%{} = type {{ %{}VTable*, {} }}",
                         class_def.name(),
                         class_def.name(),
-                        fields.iter().map(|(f,_)| self.type_to_llvm(&f.var_type)).collect::<Vec<_>>().join(", ")
+                        fields
+                            .iter()
+                            .map(|(f, _)| self.type_to_llvm(&f.var_type))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
-
-
 
                     // Insert the class definition into the class definitions
                     self.class_definitions
                         .insert(name.clone(), class_def.clone());
-
                 }
                 _ => {
                     panic!(
@@ -1312,8 +1362,19 @@ impl LLVM {
         }
     }
 
-    fn generate_function_signature(&self, func_name: String, function: &Type, no_args: bool) -> String {
-        if let Type::Function { args, ret_type, is_variadic } = function {
+    fn generate_function_signature(
+        &self,
+        func_name: String,
+        function: &Type,
+        no_args: bool,
+        unnamed: bool,
+    ) -> String {
+        if let Type::Function {
+            args,
+            ret_type,
+            is_variadic,
+        } = function
+        {
             let return_type = self.type_to_llvm(ret_type);
             let params = args
                 .iter()
@@ -1329,10 +1390,18 @@ impl LLVM {
             } else {
                 params.clone()
             };
-            if !no_args {
-                format!("{} {}@{}", return_type, variadic_str, func_name)
+            if !unnamed {
+                if !no_args {
+                    format!("{} {}@{}", return_type, variadic_str, func_name)
+                } else {
+                    format!("{} {}@{}({})", return_type, variadic_str, func_name, params)
+                }
             } else {
-                format!("{} {}@{}({})", return_type, variadic_str, func_name, params)
+                if !no_args {
+                    format!("{}", return_type)
+                } else {
+                    format!("{} ({})", return_type, params)
+                }
             }
         } else {
             panic!("generate_function_signature called with non-function type");
@@ -1341,7 +1410,8 @@ impl LLVM {
 
     fn generate_c_bindings(&mut self) {
         self.prologue.push("\n; C Bindings".to_string());
-        self.prologue.push("declare i32 @printf(i8*, ...)   ;".to_string());
+        self.prologue
+            .push("declare i32 @printf(i8*, ...)   ;".to_string());
         self.scope.insert_top(
             Register::new(Type::I32),
             Variable {
@@ -1353,7 +1423,8 @@ impl LLVM {
                 },
             },
         );
-        self.prologue.push("declare i32 @scanf(i8*, ...)   ;".to_string());
+        self.prologue
+            .push("declare i32 @scanf(i8*, ...)   ;".to_string());
         self.scope.insert_top(
             Register::new(Type::I32),
             Variable {
@@ -1365,7 +1436,8 @@ impl LLVM {
                 },
             },
         );
-        self.prologue.push("declare i8* @malloc(i64)  ;".to_string());
+        self.prologue
+            .push("declare i8* @malloc(i64)  ;".to_string());
         self.scope.insert_top(
             Register::new(Type::Pointer(Box::new(Type::I8))),
             Variable {
