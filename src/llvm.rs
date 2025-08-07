@@ -620,6 +620,70 @@ impl LLVM {
                         return_eval.register.to_string()
                     ));
                 }
+                Statement::Class { name: _name, parent: _parent, fields: _fields, methods: _methods } => {
+                    //
+                    // Handle class transformation
+                    //
+
+                    //
+                    // NOTES:
+                    //
+                    // Classes in LLVM IR are not directly supported. So we need to
+                    //
+                    // 1. Compile a struct for the class
+                    // 2. Compile a constructor function for the class
+                    // 3. Validate all fields are declared with VariableDecl in the constructor
+                    // 4. Compile all methods as functions
+                    // 5. Implement a VTABLE for the class if it has methods
+                    // 6. Pass `this` around explicitly in method calls
+                    //
+                    
+                    //
+                    // EXAMPLE:
+                    //
+                    // class Animal {
+                    //     private name: string;
+                    //     private age: i32;
+                    //
+                    //     public function speak() -> string {
+                    //         return "Animal sound";
+                    //     }
+                    // };
+                    //
+                    // class Dog : Animal {
+                    //     public breed: string;
+                    //
+                    //     public function speak() -> string {
+                    //         return "Woof!";
+                    //     }
+                    // };
+
+                    //
+                    // COMPILES:
+                    //
+                    // ; Type definitions
+                    // %AnimalVTable = type { i8* (%Animal*)* }
+                    // %Animal = type { %AnimalVTable*, i8*, i32 }       ; vtable*, name, age
+                    // %Dog    = type { %AnimalVTable*, i8*, i32, i8* }   ; vtable*, name, age, breed
+                    // 
+                    // ; Declare the speak functions
+                    // declare i8* @Animal_speak(%Animal*)
+                    // declare i8* @Dog_speak(%Animal*)
+                    //
+                    // ; Insantiate VTables as global variables
+                    // @Animal_vtable = global %AnimalVTable { i8* (%Animal*)* @Animal_speak }
+                    // @Dog_vtable    = global %AnimalVTable { i8* (%Animal*)* @Dog_speak }
+
+                    // ; Implement the Animal_speak method
+                    // define i8* @Animal_speak(%Animal* %this) {
+                    //    ...
+                    // }
+                    //
+                    // ; Implement the Dog_speak method
+                    // define i8* @Dog_speak(%Animal* %this) {
+                    //    ...
+                    // }
+                }
                 _ => {
                     panic!(
                         "Unsupported statement type in LLVM IR transformation\n[Statement]:\n {:?}",

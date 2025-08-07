@@ -13,6 +13,24 @@ pub enum Visibility {
     Protected,
 }
 
+impl Display for Visibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fmtstr = match self {
+            Visibility::Public => "public".to_string(),
+            Visibility::Private => "private".to_string(),
+            Visibility::Protected => "protected".to_string(),
+        };
+        write!(f, "{}", fmtstr)
+    }
+}
+
+// Implement Hash for Visibility if not already derived
+impl std::hash::Hash for Visibility {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     VariableDecl {

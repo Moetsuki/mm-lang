@@ -1,5 +1,7 @@
 use std::{fmt::Display, str::FromStr, hash::{Hash, Hasher}};
 
+use crate::statement::Visibility;
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Type {
     Bool,
@@ -19,6 +21,11 @@ pub enum Type {
         args: Vec<Type>, 
         ret_type: Box<Type>,
         is_variadic: bool,
+    },
+    Class {
+        parent: Option<Box<Type>>,
+        fields: Vec<(Box<Type>, Visibility)>,
+        methods: Vec<(Box<Type>, Visibility)>,
     },
     Array(Box<Type>),
     UserType(String),
@@ -71,6 +78,27 @@ impl Display for Type {
                     params_str,
                     variadic_str,
                     ret_type.to_string()
+                )
+            },
+            Type::Class { parent, fields, methods } => {
+                let parent_str = if let Some(p) = parent {
+                    format!(" extends {}", p)
+                } else {
+                    String::new()
+                };
+                let fields_str = fields
+                    .iter()
+                    .map(|(field_type, visibility)| format!("{}: {}", visibility, field_type))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let methods_str = methods
+                    .iter()
+                    .map(|(method, visibility)| format!("{}: {}", visibility, method))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "class{} {{ fields: [{}], methods: [{}] }}",
+                    parent_str, fields_str, methods_str
                 )
             },
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
@@ -132,6 +160,13 @@ impl Hash for Type {
             Type::Function { args, ret_type, .. } => {
                 args.hash(state);
                 ret_type.hash(state);
+            }
+            Type::Class { parent, fields, methods } => {
+                if let Some(p) = parent {
+                    p.hash(state);
+                }
+                fields.hash(state);
+                methods.hash(state);
             }
             Type::Array(elem_type) => elem_type.hash(state),
             Type::Pointer(inner_type) => {
