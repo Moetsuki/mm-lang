@@ -303,11 +303,11 @@ impl LLVM {
     #[track_caller]
     pub fn transform(&mut self) -> Evaluation {
         let statements = self.ast.get().unwrap().statements.clone();
-        self.transform_block(&statements)
+        self.transform_block(&statements).unwrap()
     }
 
     #[track_caller]
-    pub fn transform_block(&mut self, statements: &[Statement]) -> Evaluation {
+    pub fn transform_block(&mut self, statements: &[Statement]) -> Option<Evaluation> {
         let mut eval = Evaluation {
             prologue: IR::new(),
             epilogue: IR::new(),
@@ -415,7 +415,7 @@ impl LLVM {
 
                     // True block
                     eval.epilogue.push(format!("{}:", true_label));
-                    let then_eval = self.transform_block(&then_block.statements);
+                    let then_eval = self.transform_block(&then_block.statements).expect("Failed to compile true-statements block");
                     eval.epilogue
                         .instructions
                         .extend(then_eval.prologue.instructions);
@@ -427,7 +427,7 @@ impl LLVM {
                     // False block (if exists)
                     if let Some(else_block) = else_block {
                         eval.epilogue.push(format!("{}:", false_label));
-                        let else_eval = self.transform_block(&else_block.statements);
+                        let else_eval = self.transform_block(&else_block.statements).expect("Failed to compile false-statements block");
                         eval.epilogue
                             .instructions
                             .extend(else_eval.prologue.instructions);
@@ -488,7 +488,7 @@ impl LLVM {
                     }
 
                     // Transform function body
-                    let mut body_eval = self.transform_block(&body.statements);
+                    let mut body_eval = self.transform_block(&body.statements).expect("Failed to compile function body");
 
                     // Check the body_eval register, if we don't have a match
                     // We need to fix the last instruction.
@@ -541,6 +541,8 @@ impl LLVM {
                     };
                     let func_register = Register::new(ret_type.clone());
                     self.scope.insert_top(func_register, var_info);
+
+                    return None; // No evaluation for function definitions
                 }
                 Statement::Call { callee, args } => {
                     // Get function name from callee
@@ -629,7 +631,7 @@ impl LLVM {
 
         self.scope.exit_scope();
 
-        eval
+        Some(eval)
     }
 
     #[track_caller]
