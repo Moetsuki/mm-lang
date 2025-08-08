@@ -705,7 +705,7 @@ impl LLVM {
                     name,
                     parent,
                     fields,
-                    ..
+                    methods,
                 } => {
                     //
                     // Handle class transformation
@@ -805,6 +805,36 @@ impl LLVM {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
+
+                    // Find the constructor function for the class
+                    let constructor_name = format!("__{}__init", class_def.name());
+                    let destructor_name = format!("__{}__destroy", class_def.name());
+                    let constructor = methods
+                        .iter()
+                        .find(|(m, _)| match m.as_ref() {
+                            Statement::Function { name, .. } if name == &constructor_name => true,
+                            _ => false,
+                        })
+                        .map(|(m, _)| m.clone())
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "Constructor '{}' not found for class '{}'",
+                                constructor_name, class_def.name()
+                            )
+                        });
+                    let destructor = methods
+                        .iter()
+                        .find(|(m, _)| match m.as_ref() {
+                            Statement::Function { name, .. } if name == &destructor_name => true,
+                            _ => false,
+                        })
+                        .map(|(m, _)| m.clone())
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "Destructor '{}' not found for class '{}'",
+                                destructor_name, class_def.name()
+                            )
+                        });
 
                     // Generate the class VTable
                     // Collect methods from parent classes up the chain, starting from base class moving up

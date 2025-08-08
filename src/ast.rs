@@ -278,6 +278,9 @@ impl Ast {
                     let mut fields = Vec::new();
                     let mut methods = Vec::new();
 
+                    let mut constructor_defined = false;
+                    let mut destructor_defined = false;
+
                     // Each field or method must be prefixed with a visibility keyword
                     while let Some(class_token) = self.peek_token() {
                         // println!("Parsing class token: {:?}", class_token.token);
@@ -328,6 +331,18 @@ impl Ast {
                                     panic!("Expected a field or method after visibility keyword");
                                 }
                             }
+                            Token::Keyword(keyword) if keyword == "init" => {
+                                // Handle special init/destroy methods
+                                constructor_defined = true;
+                                let method = self.parse_constructor_destructor(class_name.clone());
+                                methods.push((Box::new(method), Visibility::Public));
+                            }
+                            Token::Keyword(keyword) if keyword == "destroy" => {
+                                // Handle special init/destroy methods
+                                destructor_defined = true;
+                                let method = self.parse_constructor_destructor(class_name.clone());
+                                methods.push((Box::new(method), Visibility::Public));
+                            }
                             Token::Newline => {
                                 // Ignore newlines
                                 self.next_token(); // consume the newline
@@ -337,6 +352,29 @@ impl Ast {
                                 break;
                             }
                         }
+                    }
+
+                    // If no constructor is defined, we define a default one
+                    if !constructor_defined {
+                        methods.push((Box::new(
+                            Statement::Function {
+                                name: format!("__{}_init", class_name),
+                                ret_type: Type::NoneType,
+                                params: Vec::new(),
+                                body: Block::new(Vec::new()),
+                            }
+                        ), Visibility::Public));
+                    }
+
+                    if !destructor_defined {
+                        methods.push((Box::new(
+                            Statement::Function {
+                                name: format!("__{}_destroy", class_name),
+                                ret_type: Type::NoneType,
+                                params: Vec::new(),
+                                body: Block::new(Vec::new()),
+                            }
+                        ), Visibility::Public));
                     }
 
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
@@ -705,6 +743,51 @@ impl Ast {
             name,
             ret_type,
             params,
+            body,
+        }
+    }
+
+
+    fn parse_constructor_destructor(&mut self, class_name: String) -> Statement {
+        let name = if let Some(lexical_token) = self.next_token() {
+            if let Token::Keyword(keyword) = &lexical_token.token {
+                if keyword == "init" || keyword == "destroy" {
+                    format!("__{}_{}", class_name, keyword)
+                } else {
+                    panic!(
+                        "Expected 'init' or 'destroy', found {:?} at line {}, column {}",
+                        lexical_token.token, lexical_token.line, lexical_token.column
+                    );
+                }
+            } else {
+                panic!(
+                    "Expected constructor/destructor name, found {:?} at line {}, column {}",
+                    lexical_token.token, lexical_token.line, lexical_token.column
+                );  
+            }
+        } else {
+            panic!("Expected constructor/destructor, but no more tokens available");
+        };
+
+        let mut ret_type: Type;
+        if let Some(arrow_token) = self.peek_token() {
+            if arrow_token.token == Token::Punctuation("->".to_string()) {
+                self.next_token(); // consume '->'
+                ret_type = self.parse_type();
+            } else {
+                ret_type = Type::NoneType;
+            }
+        } else {
+            ret_type = Type::NoneType;
+        }
+        self.expect(&Token::Punctuation("{".to_string()));
+        let body = self.parse();
+        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+        Statement::Function {
+            name,
+            ret_type,
+            params: Vec::new(),
             body,
         }
     }

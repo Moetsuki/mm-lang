@@ -6,11 +6,12 @@ pub const OPERATORS: [&str; 12] = [
     "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=",
 ];
 
-pub const KEYWORDS: [&str; 17] = [
+pub const KEYWORDS: [&str; 19] = [
     "if", "else", "while", "for", "function", "return", "as", 
     "object", "class", "entity", "component", "system", 
     "static", "dynamic", 
-    "public", "private", "protected"
+    "public", "private", "protected",
+    "init", "destroy"
 ];
 
 #[derive(Debug)]

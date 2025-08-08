@@ -333,6 +333,11 @@ fn test_method_call() {
     let source = r#"
     class Entity {
         public name: string;
+
+        init {
+            self.name = "Test Entity";
+        }
+
         public function name() -> string {
             return self.name;
         }
