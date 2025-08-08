@@ -20,6 +20,10 @@ pub enum Expression {
         op: String,
         expr: Box<Expression>,
     },
+    Call {
+        callee: Box<Expression>,
+        args: Vec<Expression>,
+    },
 }
 
 impl Display for Expression {
@@ -36,6 +40,10 @@ impl Display for Expression {
                 format!("BinaryOp({} {} {})", left, op, right)
             }
             Expression::UnaryOp { op, expr } => format!("UnaryOp({} {})", op, expr),
+            Expression::Call { callee, args } => {
+                let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
+                format!("Call({}, [{}])", callee, args_str)
+            }
         };
         write!(f, "{}", fmtstr)
     }
