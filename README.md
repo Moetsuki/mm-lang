@@ -1,42 +1,46 @@
 # MM-Lang Programming Language
 
-A custom programming language compiler written in Rust that compiles to LLVM IR.
+A custom programming language compiler written in Rust that lowers to LLVM IR.
 
 ## Overview
 
-MM-Lang is a statically-typed programming language with C-like syntax that compiles directly to LLVM IR. The language supports explicit variable declarations with type annotations, functions, control flow, type casting, and basic arithmetic operations.
+MM-Lang is a small, statically‑typed, expression–oriented language with C / Rust inspired surface syntax. The current prototype supports:
 
-## Features
+- Explicit variable declarations with type annotations
+- First‑class (top level) functions with parameters & return types
+- Blocks, if / else control flow, return
+- Arithmetic, comparison, unary `-` and logical negation `!`
+- Implicit numeric coercions (widening) & explicit casts with `as`
+- Strings (lowered to C strings) and interop with selected C functions (`printf`, `scanf`, `malloc`, `free`)
+- Single inheritance classes with fields, visibility modifiers, methods & simple virtual table layout work‑in‑progress
+- Method calls (`object.method()`)
+- Basic constructor syntax via an `init { ... }` block (prototype)
 
-- **Static Typing**: Variables and functions must be explicitly typed
-- **LLVM Backend**: Compiles to efficient LLVM IR
-- **Control Flow**: Support for if-else statements and function calls
-- **Type System**: Built-in types including integers, floats, booleans, and strings
-- **Function Definitions**: First-class functions with parameters and return types
-- **Type Casting**: Explicit type conversion using the `as` keyword
-- **Type Coercion**: Automatic type promotion for compatible types
+> NOTE: The class / vtable system is experimental and still evolving. Many semantic checks (visibility enforcement, overriding validation, etc.) are not yet implemented.
 
-## Language Syntax
+## Core Features
 
-### Variable Declarations
+### Types
+Primitive & built‑in types (subset implemented):
+`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `string`.
+
+### Variable Declarations / Assignment
 ```mm
 x: i64 = 5;
 y: i64 = 10;
-z: i64 = x + y;
+x = y + 2;
 ```
+Variables must be declared before use. Re‑assignment omits the type.
 
-### Variable Assignments
+### Functions
 ```mm
-x: i64 = 5;  // Declaration with initial value
-x = 10;      // Assignment to existing variable
-```
-
-### Function Definitions
-```mm
-function add(x: i64, y: i64) -> i64 {
-    return x + y;
+function add(a: i64, b: i64) -> i64 {
+    return a + b;
 }
+
+result: i64 = add(10, 32);
 ```
+All non‑`void` / `NoneType` functions must end with a `return` statement (enforced by the compiler).
 
 ### Control Flow
 ```mm
@@ -47,207 +51,222 @@ if x > 10 {
     y: i64 = 30;
 }
 ```
+Nested blocks are allowed. Each block introduces a new scope.
 
-### Function Calls
-```mm
-function foo(x: i64) -> i64 {
-    return x * 2;
-}
-result: i64 = foo(10);
-```
+### Expressions & Operators
+Arithmetic: `+ - * / %`
 
-### Type Casting
-```mm
-x: i64 = 5;
-y: i32 = x as i32;
-z: i64 = x + y;
-```
+Comparison: `== != < > <= >=` (lowered currently to integer comparisons; equality for strings not yet implemented).
 
-### Type Coercion
+Unary: `-expr`, `!expr` (logical not on booleans / truthy integer values).
+
+### Type Coercion & Casting
 ```mm
 x: i32 = 5;
 y: i8 = 10;
-z: i64 = x + y; // Implicit coercion from i32 to i64
+z: i64 = x + y;        // implicit widening
+
+n: i64 = 100;
+m: i32 = n as i32;     // explicit narrowing cast
+```
+Implicit coercion only widens (never loses precision). Explicit `as` is required to narrow.
+
+### Strings & C Interop
+String literals are lowered to private constant null‑terminated byte arrays. Example using `printf`:
+```mm
+msg: string = "Hello, World!";
+printf(msg);
+```
+`printf` is declared automatically with a variadic signature. Additional C bindings: `scanf`, `malloc`, `free`.
+
+## Classes (Experimental)
+Single inheritance with visibility modifiers and methods.
+
+```mm
+class Entity {
+    public name: string;
+    protected id: u64;
+
+    // Constructor (prototype syntax)
+    init {
+        self.name = "Unnamed";
+    }
+
+    public function name() -> string {
+        return self.name;
+    }
+};
+
+class Animal : Entity {
+    private name: string;     // hides Entity.name (allowed currently)
+    private age: i32;
+    protected species: string;
+
+    public function speak() -> string {
+        return "Animal sound";
+    }
+};
+
+class Dog : Animal {
+    public breed: string;
+
+    public function speak() -> string { // override
+        return "Woof!";
+    }
+};
+
+class Cat : Animal {
+    public color: string;
+
+    public function speak() -> string { // override
+        return "Meow!";
+    }
+};
 ```
 
-## Project Structure
+### Method Calls
+```mm
+ent: Entity = Entity();
+ent.name = "Test Entity";   // field write
+result: string = ent.name(); // method call
+```
+Method lookup & vtable dispatch are in progress; current lowering treats methods similarly to functions with an explicit `self` pointer concept under development.
 
+### Visibility
+`public`, `private`, `protected` can prefix field or method declarations. Enforcement is not yet implemented in the semantic layer; they are recorded in the AST for future use.
+
+### Constructor (`init`)
+An `init { ... }` block inside a class is planned to lower to a synthesized function named `__<ClassName>_init`. The LLVM backend currently expects constructors / destructors with those synthesized names; the parser work for automatic conversion is ongoing.
+
+## Example Program
+```mm
+function max(a: i64, b: i64) -> i64 {
+    if a > b { return a; } else { return b; }
+}
+
+class Entity { public name: string; public function name() -> string { return self.name; } };
+
+x: i32 = 5;
+y: i8 = 10;
+wide: i64 = x + y;
+msg: string = "Hi";
+printf(msg);
+```
+
+## Updated Grammar (Provisional)
+EBNF sketch reflecting implemented & in‑progress constructs:
+```ebnf
+program          = { statement } ;
+
+statement        = variable_decl
+                 | assignment
+                 | function_def
+                 | class_decl
+                 | if_statement
+                 | return_statement
+                 | expression_stmt
+                 | block ;
+
+block            = "{" { statement } "}" ;
+
+variable_decl    = identifier ":" type "=" expression ";" ;
+assignment       = expression "=" expression ";" ;          (* lhs currently must be a variable *)
+return_statement = "return" expression ";" ;
+expression_stmt  = expression ";" ;                           (* e.g. function / method call *)
+
+function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ;
+param_list       = param { "," param } ;
+param            = identifier ":" type ;
+
+class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ;
+class_member     = visibility field_decl
+                 | visibility method_def
+                 | init_block ;
+
+visibility       = "public" | "private" | "protected" ;
+field_decl       = identifier ":" type ";" ;
+method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ;
+init_block       = "init" block ;                            (* prototype *)
+
+if_statement     = "if" expression block [ "else" block ] ;
+
+expression       = method_call
+                 | call
+                 | binary ;
+
+method_call      = primary "." identifier "(" [ arg_list ] ")" ;
+call             = primary "(" [ arg_list ] ")" ;
+arg_list         = expression { "," expression } ;
+
+binary           = unary { bin_op unary } ;
+unary            = [ ("-" | "!") ] primary ;
+primary          = number
+                 | string_literal
+                 | identifier
+                 | cast
+                 | "(" expression ")" ;
+cast             = primary "as" type ;
+
+bin_op           = "+" | "-" | "*" | "/" | "%" |
+                   "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+
+type             = "bool" | "i8" | "i16" | "i32" | "i64" |
+                   "u8" | "u16" | "u32" | "u64" |
+                   "f32" | "f64" | "string" |
+                   identifier ;          (* future: arrays / generics *)
+```
+Items marked prototype may differ from actual parser behavior as features stabilize.
+
+## Project Structure
 ```
 mm-lang/
 ├── src/
-│   ├── main.rs           # Entry point and test runner
-│   ├── tokenizer.rs      # Lexical analysis
-│   ├── ast.rs           # Abstract Syntax Tree parser
-│   ├── expression.rs    # Expression definitions
-│   ├── statement.rs     # Statement definitions
-│   ├── block.rs         # Block structure
-│   ├── variable.rs      # Variable definitions
-│   ├── types.rs         # Type system
-│   └── llvm.rs          # LLVM IR generation
+│   ├── main.rs          # Entry point & sample tests
+│   ├── tokenizer.rs     # Lexical analysis
+│   ├── ast.rs           # AST construction
+│   ├── expression.rs    # Expressions
+│   ├── statement.rs     # Statements & class/visibility enums
+│   ├── block.rs         # Block container
+│   ├── variable.rs      # Variable representation
+│   ├── types.rs         # Type enum / helpers
+│   └── llvm.rs          # LLVM IR generation backend
+├── docs/                # Design notes
 ├── Cargo.toml
 └── README.md
 ```
 
-## Module Documentation
-
-- [**Tokenizer**](docs/tokenizer.md) - Lexical analysis and token generation
-- [**AST Parser**](docs/ast.md) - Abstract Syntax Tree construction
-- [**Expression System**](docs/expression.md) - Expression evaluation and types
-- [**Statement System**](docs/statement.md) - Statement definitions and execution
-- [**Block System**](docs/block.md) - Code block management
-- [**Variable System**](docs/variable.md) - Variable declarations and management
-- [**Type System**](docs/types.md) - Type definitions and checking
-- [**LLVM Backend**](docs/llvm.md) - LLVM IR generation and compilation
-
-## Getting Started
-
-### Prerequisites
-
-- Rust 1.70 or later
-- Cargo package manager
-
-### Building
-
+## Building
 ```bash
 git clone https://github.com/Moetsuki/mm-lang.git
 cd mm-lang
 cargo build
 ```
 
-### Running
-
+## Running
 ```bash
 cargo run
 ```
 
-### Testing
-
+## Testing
 ```bash
 cargo test
 ```
 
-## Example Programs
-
-### Simple Arithmetic
-```mm
-x: i64 = 5;
-y: i64 = 10;
-result: i64 = x + y * 2;
-```
-
-### Function with Conditionals
-```mm
-function max(a: i64, b: i64) -> i64 {
-    if a > b {
-        return a;
-    } else {
-        return b;
-    }
-}
-
-result: i64 = max(10, 20);
-```
-
-### Nested Control Flow
-```mm
-function categorize(value: i64) -> string {
-    if value > 100 {
-        return "large";
-    } else {
-        if value > 10 {
-            return "medium";
-        } else {
-            return "small";
-        }
-    }
-}
-```
-
-## Supported Types
-
-- `bool` - Boolean values (true/false)
-- `i8`, `i16`, `i32`, `i64` - Signed integers
-- `u8`, `u16`, `u32`, `u64` - Unsigned integers
-- `f32`, `f64` - Floating-point numbers
-- `string` - String literals
-- `array<T>` - Arrays of type T
-- Custom user-defined types
-
-## Operators
-
-### Arithmetic
-- `+` - Addition
-- `-` - Subtraction
-- `*` - Multiplication
-- `/` - Division
-- `%` - Modulo
-
-### Comparison
-- `==` - Equality
-- `!=` - Inequality
-- `<` - Less than
-- `>` - Greater than
-- `<=` - Less than or equal
-- `>=` - Greater than or equal
-
-### Assignment
-- `=` - Assignment
-- `as` - Type casting
-
-## Grammar (EBNF)
-
-```ebnf
-program = { statement } ;
-
-statement = variable_declaration
-          | assignment
-          | function_def
-          | if_statement
-          | call_statement
-          | return_statement
-          | block ;
-
-variable_declaration = identifier ":" type "=" expression ";" ;
-
-assignment = identifier "=" expression ";" ;
-
-function_def = "function" identifier "(" [ parameter_list ] ")" "->" type "{" { statement } "}" ;
-
-parameter_list = parameter { "," parameter } ;
-parameter = identifier ":" type ;
-
-if_statement = "if" expression "{" { statement } "}" [ "else" "{" { statement } "}" ] ;
-
-call_statement = expression "(" [ argument_list ] ")" ";" ;
-
-return_statement = "return" expression ";" ;
-
-block = "{" { statement } "}" ;
-
-expression = term { ( "+" | "-" | "==" | "!=" | "<" | ">" | "<=" | ">=" ) term } ;
-
-term = factor { ( "*" | "/" | "%" ) factor } ;
-
-factor = number
-       | string_literal
-       | identifier
-       | identifier "as" type
-       | "(" expression ")" ;
-
-type = "bool" | "i8" | "i16" | "i32" | "i64" 
-     | "u8" | "u16" | "u32" | "u64" 
-     | "f32" | "f64" | "string" 
-     | "array" "<" type ">" 
-     | identifier ;
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## Roadmap
+- [x] Basic arithmetic & control flow
+- [x] Functions
+- [x] Strings & printf binding
+- [x] Implicit widening & explicit casting
+- [x] Unary operators
+- [x] Class AST & preliminary LLVM struct + vtable scaffolding
+- [ ] Complete method lowering with self parameter
+- [ ] Proper vtable inheritance / overriding
+- [ ] Visibility enforcement
+- [ ] Constructors / destructors end‑to‑end
+- [ ] Arrays & heap allocation helpers
+- [ ] Pattern matching
+- [ ] Generics / parametric polymorphism
+- [ ] Modules & imports
 
 ## License
 
