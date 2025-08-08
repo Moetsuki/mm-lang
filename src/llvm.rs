@@ -1,6 +1,5 @@
 use core::panic;
 
-use crate::statement;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
@@ -284,6 +283,7 @@ impl ToString for StringData {
 /// LLVM
 ///
 pub struct LLVM {
+    forward_decls: IR,
     prologue: IR,
     main_prologue: IR,
     main: IR,
@@ -299,6 +299,7 @@ pub struct LLVM {
 impl LLVM {
     pub fn new(ast: Ast) -> Self {
         LLVM {
+            forward_decls: IR::new(),
             prologue: IR::new(),
             epilogue: IR::new(),
             main_prologue: IR::new(),
@@ -359,6 +360,7 @@ impl LLVM {
 
     pub fn output(&self) -> String {
         let mut output = String::new();
+        output.push_str(&self.forward_decls.to_string());
         output.push_str(&self.prologue.to_string());
         output.push_str(&self.main_prologue.to_string());
         output.push_str(&self.main.to_string());
@@ -703,7 +705,7 @@ impl LLVM {
                     name,
                     parent,
                     fields,
-                    methods,
+                    ..
                 } => {
                     //
                     // Handle class transformation
@@ -791,13 +793,40 @@ impl LLVM {
                     // Create a new class definition
                     let class_def = Class::new(name.clone(), parent_class, statement.clone());
 
+                    // Define the class type
+                    self.prologue.push(format!(
+                        "%{} = type {{ %{}VTable*{}{} }}",
+                        class_def.name(),
+                        class_def.name(),
+                        if fields.is_empty() { "" } else { ", " },
+                        fields
+                            .iter()
+                            .map(|(f, _)| self.type_to_llvm(&f.var_type))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+
                     // Generate the class VTable
-                    // This is a forward declaration of the class type
-                    // TODO: this is incomplete
-                    let vt_content = methods
+                    // Collect methods from parent classes up the chain, starting from base class moving up
+                    let mut all_methods = Vec::new();
+                    let mut current_class: Option<&Class> = Some(&class_def);
+                    while let Some(class) = current_class {
+                        // Add methods from the current class
+                        if let Statement::Class { name, methods, .. } = &class.statement {
+                            for method in methods.iter() {
+                                if let Statement::Function { .. } = &method.0.as_ref() {
+                                    all_methods.push((method.clone(), name));
+                                }
+                            }
+                        }
+                        // Move to the parent class
+                        current_class = class.parent.as_deref();
+                    }
+
+                    let vt_content = all_methods
                         .iter()
-                        .map(|(method, _)| {
-                            match method.as_ref() {
+                        .map(|(method, class_name)| {
+                            match method.0.as_ref() {
                                 Statement::Function {
                                     name: _name,
                                     ret_type,
@@ -806,7 +835,7 @@ impl LLVM {
                                 } => {
                                     let return_type = self.type_to_llvm(&ret_type);
                                     if params.is_empty() {
-                                        format!("{} (%{}*)", return_type, class_def.name())
+                                        format!("\n\t{} (%{}*)*\t; {}\n", return_type, class_def.name(), class_name)
                                     } else {
                                         // For methods, we need to pass `this` as the first parameter
                                         // followed by the rest of the parameters
@@ -816,10 +845,11 @@ impl LLVM {
                                             .collect::<Vec<_>>()
                                             .join(", ");
                                         format!(
-                                            "{} (%{}* {})",
+                                            "\n\t{} (%{}* {})*,\t; {}",
                                             return_type,
                                             class_def.name(),
-                                            params_str
+                                            params_str,
+                                            class_name
                                         )
                                     }
                                 }
@@ -827,29 +857,13 @@ impl LLVM {
                             }
                         })
                         .collect::<Vec<_>>()
-                        .join(", ");
-
-                    // Forward declare the class type
-                    // %AnimalVTable = type { i8* (%Animal*)* }
+                        .join("\n");
                     self.prologue.push(format!(
                         "%{}VTable = type {{ {} }}",
                         class_def.name(),
                         vt_content
                     ));
 
-                    // Define the class type
-                    // %Animal = type { %AnimalVTable*, field_type1, field_type2, ... }
-                    // TODO: also incomplete, we need to add all fields
-                    self.prologue.push(format!(
-                        "%{} = type {{ %{}VTable*, {} }}",
-                        class_def.name(),
-                        class_def.name(),
-                        fields
-                            .iter()
-                            .map(|(f, _)| self.type_to_llvm(&f.var_type))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
 
                     // Insert the class definition into the class definitions
                     self.class_definitions

@@ -24,6 +24,10 @@ pub enum Expression {
         callee: Box<Expression>,
         args: Vec<Expression>,
     },
+    Method {
+        object: Box<Expression>,
+        method: Box<Expression>,
+    }
 }
 
 impl Display for Expression {
@@ -43,6 +47,9 @@ impl Display for Expression {
             Expression::Call { callee, args } => {
                 let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
                 format!("Call({}, [{}])", callee, args_str)
+            }
+            Expression::Method { object, method } => {
+                format!("Method({}, {})", object, method)
             }
         };
         write!(f, "{}", fmtstr)

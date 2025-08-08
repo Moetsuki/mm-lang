@@ -28,6 +28,12 @@ impl Ast {
         self.tree.as_ref()
     }
 
+    pub fn backtrack(&mut self) {
+        if self.pos > 0 {
+            self.pos -= 1;
+        }
+    }
+
     pub fn next_token(&mut self) -> Option<&LexicalToken> {
         if self.pos < self.tokens.len() {
             let token = &self.tokens[self.pos];
@@ -155,7 +161,25 @@ impl Ast {
                             // Method call case:
                             //
                             Token::Punctuation(p) if p == "." => {
-                                // Handle method call case
+                                // Backtrack to the identifier token
+                                self.backtrack();
+
+                                // Parse expression
+                                let expr = self.parse_expr();
+
+                                // If its a BinaryOp =, we emit an Assignment statement
+                                if let Expression::BinaryOp { op, left, right } = expr {
+                                    if op == "=" {
+                                        statements.push(Statement::Assignment {
+                                            identifier: *left,
+                                            value: *right,
+                                        });
+                                    } else {
+                                        panic!("Unexpected binary operator `{}` in method call context", op);
+                                    }
+                                } else {
+                                    panic!("Expected a BinaryOp for method call, found {:?}", expr);
+                                }
                             }
                             Token::Identifier(_) => {
                                 // Handle method call case
@@ -256,9 +280,11 @@ impl Ast {
 
                     // Each field or method must be prefixed with a visibility keyword
                     while let Some(class_token) = self.peek_token() {
-                        println!("Parsing class token: {:?}", class_token.token);
+                        // println!("Parsing class token: {:?}", class_token.token);
                         match &class_token.token {
-                            Token::Keyword(vis) if vis == "public" || vis == "private" || vis == "protected" => {
+                            Token::Keyword(vis)
+                                if vis == "public" || vis == "private" || vis == "protected" =>
+                            {
                                 let visibility = match vis.as_str() {
                                     "public" => Visibility::Public,
                                     "private" => Visibility::Private,
@@ -284,20 +310,23 @@ impl Ast {
                                             ));
                                             self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
                                         }
-                                        Token::Keyword(method_keyword) if method_keyword == "function" => {
+                                        Token::Keyword(method_keyword)
+                                            if method_keyword == "function" =>
+                                        {
                                             // Handle method declaration
                                             self.next_token(); // consume 'function'
                                             let method = self.parse_function();
                                             methods.push((Box::new(method), visibility));
                                         }
                                         _ => {
-                                            panic!("Expected a field or method after visibility keyword");
+                                            panic!(
+                                                "Expected a field or method after visibility keyword"
+                                            );
                                         }
                                     }
                                 } else {
                                     panic!("Expected a field or method after visibility keyword");
                                 }
-
                             }
                             Token::Newline => {
                                 // Ignore newlines
@@ -489,21 +518,72 @@ impl Ast {
                     // End of expression
                     match p.as_str() {
                         ")" | "}" | "{" | "," => {
-                            // Do nothing, let caller handle these
-                            break;
+                            break; // Do nothing, let caller handle these
                         }
                         ";" => {
-                            self.next_token(); // consume the punctuation
-                            break;
+                            self.next_token(); // Consume the semicolon
+                            break; // Return expression to caller
+                        }
+                        "." => {
+                            self.next_token(); // Consume the '.'
+
+                            // After the dot we expect an identifier
+                            if let Some(next_token) = self.next_token() {
+                                if let Token::Identifier(method_name) = &next_token.token {
+                                    expr = Expression::Method {
+                                        object: Box::new(expr),
+                                        method: Box::new(Expression::Variable(Variable {
+                                            name: method_name.clone(),
+                                            var_type: Type::ToBeEvaluated,
+                                        })),
+                                    };
+                                } else {
+                                    panic!(
+                                        "Expected method name after '.', found {:?} at line {}, column {}",
+                                        next_token.token, next_token.line, next_token.column
+                                    );
+                                }
+                            } else {
+                                panic!("Expected method name after '.', but no more tokens available");
+                            }
+                            
+                            // Do not give control to the caller by breaking, continue parsing
+                        }
+                        "(" => {
+                            self.next_token(); // Consume the '('
+
+                            // Expr should be a function identifier
+                            if let Expression::Variable(var) = expr {
+                                let callee = Expression::Variable(var);
+                                let args = self.parse_args();
+                                expr = Expression::Call {
+                                    callee: Box::new(callee),
+                                    args,
+                                };
+                            } else if let Expression::Method { object, method } = expr {
+                                expr = Expression::Call {
+                                    callee: Box::new(Expression::Method {
+                                        object,
+                                        method,
+                                    }),
+                                    args: self.parse_args(),
+                                };
+                            } else {
+                                panic!("Expected a variable before '(', found {:?}", expr);
+                            }
+
+                            // Expect the closing parenthesis
+                            self.expect(&Token::Punctuation(")".to_string()));
+
+                            // Do not give control to the caller by breaking, continue parsing
                         }
                         _ => {
                             break; // Let caller handle unexpected punctuation
                         }
                     }
-                }
+                } 
                 _ => {
-                    // End of expression for any other token type
-                    break;
+                    break; // End of expression for any other token type
                 }
             }
         }

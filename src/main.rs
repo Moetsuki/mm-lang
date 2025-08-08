@@ -74,7 +74,7 @@ fn process(source: &str, expected: Option<String>) {
     llvm.compile();
 
     let ir_output = llvm.output();
-    // println!("{}", ir_output);
+    println!("{}", ir_output);
 
     // Compile LLVM IR via stdin
     let mut clang = Command::new("clang")
@@ -290,9 +290,19 @@ fn test_printf() {
 #[test]
 fn test_class() {
     let source = r#"
-    class Animal {
+    class Entity {
+        public name: string;
+        protected id: u64;
+
+        public function name() -> string {
+            return self.name;
+        }
+    };
+
+    class Animal : Entity {
         private name: string;
         private age: i32;
+        protected species: string;
 
         public function speak() -> string {
             return "Animal sound";
@@ -306,6 +316,31 @@ fn test_class() {
             return "Woof!";
         }
     };
+
+    class Cat : Animal {
+        public color: string;
+
+        public function speak() -> string {
+            return "Meow!";
+        }
+    };
+    "#;
+    process(source, None);
+}
+
+#[test]
+fn test_method_call() {
+    let source = r#"
+    class Entity {
+        public name: string;
+        public function name() -> string {
+            return self.name;
+        }
+    };
+
+    ent: Entity = Entity();
+    ent.name = "Test Entity";
+    result: string = ent.name();
     "#;
     process(source, None);
 }
