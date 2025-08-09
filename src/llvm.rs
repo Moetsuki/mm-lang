@@ -170,7 +170,7 @@ impl Register {
             Type::F64 => "double".to_string(),
             Type::String => "ptr".to_string(),
             Type::NoneType => "void".to_string(),
-            Type::ToBeEvaluated => "i64".to_string(),
+            Type::Pointer(..) => "ptr".to_string(),
             _ => panic!("Unsupported type {} for LLVM register", self.var_type),
         }
     }
@@ -663,9 +663,15 @@ impl LLVM {
                         },
                     };
                     let func_register = Register::new(ret_type.clone());
-                    self.scope.insert_top(func_register, var_info);
+                    self.scope.insert_top(func_register.clone(), var_info);
 
-                    return None; // No evaluation for function definitions
+                    Evaluation {
+                        prologue: IR::new(),
+                        epilogue: IR::new(),
+                        register: func_register,
+                        current_class_context: None,
+                        current_struct_context: None,
+                    };
                 }
                 Statement::Call { callee, args } => {
                     match callee {
@@ -1541,6 +1547,82 @@ impl LLVM {
                         field_ptr_register.to_string()
                     ));
                     eval.register = field_value_register;
+                }
+            }
+            Expression::Call { callee, args } => {
+                match *callee {
+                    Expression::Variable(var) => {
+                        // Find the function in the current scope
+                       let func = self
+                            .scope
+                            .find(&var);
+
+                        // Find the class in the current scope
+                        let class = self
+                            .class_definitions
+                            .get(&var.name)
+                            .or_else(
+                                || self.current_class_scope.as_ref().and_then(|c| {
+                                    if c.name == var.name {
+                                        Some(c)
+                                    } else {
+                                        None
+                                    }
+                                }).map(|v| &**v)
+                            );
+
+                        // println!("[LLVM Call] Function: {:?}, Class: {:?}", func, class);
+                        // println!("[LLVM Call] Variable: {:?}", var);
+                        // println!("[LLVM Call] Scope: {:?}", self.scope);
+                        // println!("[LLVM Call] Classes: {:?}", self.class_definitions);
+
+                        // If the function is not found and the class name is the same
+                        // as the variable name, treat it as a method call to the constructor
+                        let func_name = if func.is_none() && class.is_some() {
+                            let class_name = class.as_ref().unwrap().name.clone();
+                            let class_def = class.unwrap();
+                            match class_def.statement {
+                                Statement::Class { .. } => {
+                                    // Register the class type in the evaluation context
+                                    let cl = self.get_class_type(&class_name);
+                                    eval.register.var_type = Type::Pointer(Box::new(cl));
+                                }
+                                _ => panic!("Expected class statement for constructor"),
+                            }
+                            format!("__{}_init", class_name)
+                        } else {
+                            eval.register.var_type = func.as_ref().unwrap().var_type.clone();
+                            var.name.clone()
+                        };
+                        
+                        // Prepare arguments
+                        let mut arg_registers = Vec::new();
+                        for arg in args {
+                            let arg_eval = self.transform_expression(arg);
+                            eval.prologue
+                                .instructions
+                                .extend(arg_eval.prologue.instructions);
+                            eval.epilogue
+                                .instructions
+                                .extend(arg_eval.epilogue.instructions);
+                            arg_registers.push(arg_eval.register);
+                        }
+
+                        // Call the function
+                        let args_str = arg_registers
+                            .iter()
+                            .map(|r| r.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        eval.epilogue.push(format!(
+                            "%{} = call {} @{}({})",
+                            eval.register.to_string(),
+                            eval.register.llvm_type(),
+                            func_name,
+                            args_str
+                        ));
+                    }
+                    _ => panic!("Unsupported callee type in function call"),
                 }
             }
             _ => {
