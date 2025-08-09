@@ -74,7 +74,9 @@ fn process(source: &str, expected: Option<String>) {
     llvm.compile();
 
     let ir_output = llvm.output();
-    println!("{}", ir_output);
+    for (i, line) in ir_output.lines().enumerate() {
+        println!("{:>3}: {}", i, line);
+    }
 
     // Compile LLVM IR via stdin
     let mut clang = Command::new("clang")
@@ -334,8 +336,8 @@ fn test_method_call() {
     class Entity {
         public name: string;
 
-        init {
-            self.name = "Test Entity";
+        init(str: string) {
+            self.name = str;
         }
 
         public function name() -> string {
