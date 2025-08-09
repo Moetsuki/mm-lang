@@ -6,25 +6,32 @@ A custom programming language compiler written in Rust that lowers to LLVM IR.
 
 MM-Lang is a small, statically‑typed, expression–oriented language with C / Rust inspired surface syntax. The current prototype supports:
 
+**Fully Working Features (Tested):**
 - Explicit variable declarations with type annotations
-- First‑class (top level) functions with parameters & return types
-- Blocks, if / else control flow, return
 - Arithmetic, comparison, unary `-` and logical negation `!`
 - Implicit numeric coercions (widening) & explicit casts with `as`
-- Strings (lowered to C strings) and interop with selected C functions (`printf`, `scanf`, `malloc`, `free`)
-- Single inheritance classes with fields, visibility modifiers, methods & simple virtual table layout work‑in‑progress
-- Method calls (`object.method()`)
-- Basic constructor syntax via an `init { ... }` block (prototype)
+- Blocks, if / else control flow
+- Basic I/O operations via `printf` binding
+- String literals (lowered to C strings)
 
-> NOTE: The class / vtable system is experimental and still evolving. Many semantic checks (visibility enforcement, overriding validation, etc.) are not yet implemented.
+**Partially Working Features:**
+- Single inheritance classes with fields and visibility modifiers (AST parsing works)
+- Constructor syntax via `init { ... }` blocks (parsed but LLVM codegen incomplete)
+
+**In Development:**
+- First‑class functions with parameters & return types (parsing works, LLVM codegen has issues)
+- Method calls and field access (parsing works, codegen incomplete)
+- Function calls (parsing works, codegen incomplete)
+
+> NOTE: The compiler successfully parses most language constructs and generates LLVM IR for basic operations, but advanced features like classes, functions, and method calls are still under development in the LLVM backend.
 
 ## Core Features
 
 ### Types
-Primitive & built‑in types (subset implemented):
+Primitive & built‑in types:
 `bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `string`.
 
-### Variable Declarations / Assignment
+### Variable Declarations / Assignment ✅
 ```mm
 x: i64 = 5;
 y: i64 = 10;
@@ -32,7 +39,7 @@ x = y + 2;
 ```
 Variables must be declared before use. Re‑assignment omits the type.
 
-### Functions
+### Functions ⚠️
 ```mm
 function add(a: i64, b: i64) -> i64 {
     return a + b;
@@ -40,9 +47,9 @@ function add(a: i64, b: i64) -> i64 {
 
 result: i64 = add(10, 32);
 ```
-All non‑`void` / `NoneType` functions must end with a `return` statement (enforced by the compiler).
+Function parsing is complete, but LLVM code generation is not fully implemented.
 
-### Control Flow
+### Control Flow ✅
 ```mm
 x: i64 = 5;
 if x > 10 {
@@ -53,14 +60,14 @@ if x > 10 {
 ```
 Nested blocks are allowed. Each block introduces a new scope.
 
-### Expressions & Operators
+### Expressions & Operators ✅
 Arithmetic: `+ - * / %`
 
-Comparison: `== != < > <= >=` (lowered currently to integer comparisons; equality for strings not yet implemented).
+Comparison: `== != < > <= >=` (lowered to integer comparisons).
 
 Unary: `-expr`, `!expr` (logical not on booleans / truthy integer values).
 
-### Type Coercion & Casting
+### Type Coercion & Casting ✅
 ```mm
 x: i32 = 5;
 y: i8 = 10;
@@ -71,7 +78,7 @@ m: i32 = n as i32;     // explicit narrowing cast
 ```
 Implicit coercion only widens (never loses precision). Explicit `as` is required to narrow.
 
-### Strings & C Interop
+### Strings & C Interop ✅
 String literals are lowered to private constant null‑terminated byte arrays. Example using `printf`:
 ```mm
 msg: string = "Hello, World!";
@@ -79,8 +86,8 @@ printf(msg);
 ```
 `printf` is declared automatically with a variadic signature. Additional C bindings: `scanf`, `malloc`, `free`.
 
-## Classes (Experimental)
-Single inheritance with visibility modifiers and methods.
+## Classes (Experimental) ⚠️
+Single inheritance with visibility modifiers and methods. **Note: Parsing works correctly, but LLVM code generation is incomplete.**
 
 ```mm
 class Entity {
@@ -88,17 +95,16 @@ class Entity {
     protected id: u64;
 
     // Constructor (prototype syntax)
-    init {
-        self.name = "Unnamed";
+    init(new_id: u64) {
+        self.id = new_id;
     }
 
-    public function name() -> string {
+    public function get_name() -> string {
         return self.name;
     }
 };
 
 class Animal : Entity {
-    private name: string;     // hides Entity.name (allowed currently)
     private age: i32;
     protected species: string;
 
@@ -106,116 +112,109 @@ class Animal : Entity {
         return "Animal sound";
     }
 };
-
-class Dog : Animal {
-    public breed: string;
-
-    public function speak() -> string { // override
-        return "Woof!";
-    }
-};
-
-class Cat : Animal {
-    public color: string;
-
-    public function speak() -> string { // override
-        return "Meow!";
-    }
-};
 ```
 
-### Method Calls
+### Current Status:
+- ✅ Class declarations with inheritance
+- ✅ Field declarations with visibility modifiers
+- ✅ Method declarations  
+- ✅ Constructor `init` blocks with parameters
+- ⚠️ LLVM struct generation (partial)
+- ❌ Method calls and field access (codegen incomplete)
+- ❌ Proper vtable inheritance/dispatch
+- ❌ Visibility enforcement
+
+## Example Program (Working Features)
 ```mm
-ent: Entity = Entity();
-ent.name = "Test Entity";   // field write
-result: string = ent.name(); // method call
-```
-Method lookup & vtable dispatch are in progress; current lowering treats methods similarly to functions with an explicit `self` pointer concept under development.
-
-### Visibility
-`public`, `private`, `protected` can prefix field or method declarations. Enforcement is not yet implemented in the semantic layer; they are recorded in the AST for future use.
-
-### Constructor (`init`)
-An `init { ... }` block inside a class is planned to lower to a synthesized function named `__<ClassName>_init`. The LLVM backend currently expects constructors / destructors with those synthesized names; the parser work for automatic conversion is ongoing.
-
-## Example Program
-```mm
-function max(a: i64, b: i64) -> i64 {
-    if a > b { return a; } else { return b; }
-}
-
-class Entity { public name: string; public function name() -> string { return self.name; } };
-
+// Variable declarations and type coercion
 x: i32 = 5;
 y: i8 = 10;
-wide: i64 = x + y;
-msg: string = "Hi";
-printf(msg);
+wide: i64 = x + y;  // implicit widening
+
+// Type casting
+narrow: i32 = wide as i32;
+
+// Unary operations
+negative: i64 = -wide;
+
+// Control flow
+if x > 3 {
+    msg: string = "Greater than 3";
+    printf(msg);
+} else {
+    msg: string = "Not greater than 3";  
+    printf(msg);
+}
 ```
 
 ## Updated Grammar (Provisional)
-EBNF sketch reflecting implemented & in‑progress constructs:
+EBNF sketch reflecting implemented constructs. Note: All parsing is implemented, but LLVM code generation is incomplete for some features.
+
 ```ebnf
 program          = { statement } ;
 
-statement        = variable_decl
-                 | assignment
-                 | function_def
-                 | class_decl
-                 | if_statement
-                 | return_statement
-                 | expression_stmt
-                 | block ;
+statement        = variable_decl        (* ✅ Working *)
+                 | assignment           (* ✅ Working for variables *)
+                 | function_def         (* ⚠️ Parsing works, codegen incomplete *)
+                 | class_decl           (* ⚠️ Parsing works, codegen incomplete *) 
+                 | if_statement         (* ✅ Working *)
+                 | return_statement     (* ⚠️ Parsing works, codegen incomplete *)
+                 | expression_stmt      (* ⚠️ Limited support *)
+                 | block ;              (* ✅ Working *)
 
-block            = "{" { statement } "}" ;
+block            = "{" { statement } "}" ;                    (* ✅ Working *)
 
-variable_decl    = identifier ":" type "=" expression ";" ;
-assignment       = expression "=" expression ";" ;          (* lhs currently must be a variable *)
-return_statement = "return" expression ";" ;
-expression_stmt  = expression ";" ;                           (* e.g. function / method call *)
+variable_decl    = identifier ":" type "=" expression ";" ;   (* ✅ Working *)
+assignment       = expression "=" expression ";" ;           (* ⚠️ Variables only *)
+return_statement = "return" expression ";" ;                 (* ⚠️ Parsed but not codegen *)
+expression_stmt  = expression ";" ;                          (* ⚠️ Basic expressions only *)
 
-function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ;
+function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ⚠️ *)
 param_list       = param { "," param } ;
 param            = identifier ":" type ;
 
-class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ;
+class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ; (* ⚠️ *)
 class_member     = visibility field_decl
-                 | visibility method_def
+                 | visibility method_def  
                  | init_block ;
 
-visibility       = "public" | "private" | "protected" ;
-field_decl       = identifier ":" type ";" ;
-method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ;
-init_block       = "init" block ;                            (* prototype *)
+visibility       = "public" | "private" | "protected" ;      (* ✅ Parsed *)
+field_decl       = identifier ":" type ";" ;                 (* ✅ Parsed *)
+method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ⚠️ *)
+init_block       = "init" "(" [ param_list ] ")" block ;     (* ⚠️ Parsed *)
 
-if_statement     = "if" expression block [ "else" block ] ;
+if_statement     = "if" expression block [ "else" block ] ;  (* ✅ Working *)
 
-expression       = method_call
-                 | call
-                 | binary ;
+expression       = method_call          (* ⚠️ Parsed only *)
+                 | call                 (* ⚠️ Parsed only *)
+                 | binary ;             (* ✅ Working *)
 
-method_call      = primary "." identifier "(" [ arg_list ] ")" ;
-call             = primary "(" [ arg_list ] ")" ;
+method_call      = primary "." identifier "(" [ arg_list ] ")" ; (* ⚠️ *)
+call             = primary "(" [ arg_list ] ")" ;                (* ⚠️ *)
 arg_list         = expression { "," expression } ;
 
-binary           = unary { bin_op unary } ;
-unary            = [ ("-" | "!") ] primary ;
-primary          = number
-                 | string_literal
-                 | identifier
-                 | cast
-                 | "(" expression ")" ;
-cast             = primary "as" type ;
+binary           = unary { bin_op unary } ;                  (* ✅ Working *)
+unary            = [ ("-" | "!") ] primary ;                 (* ✅ Working *)
+primary          = number                                     (* ✅ Working *)
+                 | string_literal                             (* ✅ Working *)
+                 | identifier                                 (* ✅ Working *)
+                 | cast                                       (* ✅ Working *)
+                 | "(" expression ")" ;                       (* ✅ Working *)
+cast             = primary "as" type ;                       (* ✅ Working *)
 
-bin_op           = "+" | "-" | "*" | "/" | "%" |
-                   "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+bin_op           = "+" | "-" | "*" | "/" | "%" |             (* ✅ Working *)
+                   "==" | "!=" | "<" | ">" | "<=" | ">=" ;   (* ✅ Working *)
 
-type             = "bool" | "i8" | "i16" | "i32" | "i64" |
-                   "u8" | "u16" | "u32" | "u64" |
-                   "f32" | "f64" | "string" |
+type             = "bool" | "i8" | "i16" | "i32" | "i64" |   (* ✅ Working *)
+                   "u8" | "u16" | "u32" | "u64" |            (* ✅ Working *)
+                   "f32" | "f64" | "string" |                (* ✅ Working *)
                    identifier ;          (* future: arrays / generics *)
 ```
-Items marked prototype may differ from actual parser behavior as features stabilize.
+
+**Legend:**
+- ✅ **Working**: Full parsing + LLVM codegen + tested
+- ⚠️ **Partial**: Parsing complete, LLVM codegen incomplete  
+- ❌ **Not implemented**: Neither parsing nor codegen
 
 ## Project Structure
 ```
@@ -247,26 +246,80 @@ cargo build
 cargo run
 ```
 
+## Current Limitations & Known Issues
+
+### Working Features
+- ✅ All basic language constructs: variables, arithmetic, comparisons, type coercion/casting
+- ✅ Control flow: if/else statements, blocks, scoping
+- ✅ Unary operations and string literals
+- ✅ C interop: printf function calls
+
+### Known Issues
+- ❌ **Function definitions and calls**: Parsing works but LLVM codegen fails with register resolution
+- ❌ **Class instantiation and method calls**: AST generation complete but LLVM backend incomplete
+- ❌ **Field access operations**: Expression parsing works but codegen not implemented  
+- ❌ **Return statements**: Not properly handled in LLVM generation
+- ⚠️ **Type system**: Some edge cases in type conversion and inference
+
+### Debug Information
+The compiler provides detailed AST output and LLVM IR generation traces. Failed tests show exactly where in the compilation pipeline issues occur, making it easy to track progress on incomplete features.
+
 ## Testing
+
+Run the test suite to see current implementation status:
+
 ```bash
 cargo test
 ```
 
+### Test Results Overview:
+- ✅ **Passing (9 tests)**: Basic variable declarations, arithmetic operations, type coercion/casting, unary operations, control flow (if/else), blocks, and printf output
+- ❌ **Failing (5 tests)**: Functions, function calls, classes, method calls - these features are partially implemented in parsing but have incomplete LLVM code generation
+
+### Individual Test Status:
+- `test_variable_declaration` ✅
+- `test_assignment` ✅  
+- `test_casting` ✅
+- `test_coercion` ✅
+- `test_unary_op` ✅
+- `test_unary_op_const` ✅
+- `test_if_statement` ✅
+- `test_block` ✅
+- `test_printf` ✅
+- `test_function` ❌ (LLVM codegen incomplete)
+- `test_function_call` ❌ (LLVM codegen incomplete)
+- `test_class` ❌ (LLVM codegen incomplete)
+- `test_simple_class` ❌ (LLVM codegen incomplete)  
+- `test_method_call` ❌ (LLVM codegen incomplete)
+
 ## Roadmap
+
+### ✅ Completed
 - [x] Basic arithmetic & control flow
-- [x] Functions
-- [x] Strings & printf binding
+- [x] Variable declarations and assignments  
 - [x] Implicit widening & explicit casting
 - [x] Unary operators
-- [x] Class AST & preliminary LLVM struct + vtable scaffolding
-- [ ] Complete method lowering with self parameter
-- [ ] Proper vtable inheritance / overriding
-- [ ] Visibility enforcement
-- [ ] Constructors / destructors end‑to‑end
+- [x] Strings & printf binding
+- [x] Class AST parsing & visibility modifiers
+- [x] Constructor `init` block parsing
+- [x] Inheritance parsing
+
+### 🚧 In Progress  
+- [ ] Complete function LLVM code generation
+- [ ] Complete method calls and field access LLVM codegen
+- [ ] Proper vtable inheritance & method dispatch
+- [ ] Constructor/destructor end-to-end implementation
+
+### 📋 Planned
+- [ ] Visibility enforcement in semantic analysis
 - [ ] Arrays & heap allocation helpers
 - [ ] Pattern matching
-- [ ] Generics / parametric polymorphism
+- [ ] Generics / parametric polymorphism  
 - [ ] Modules & imports
+- [ ] Standard library
+- [ ] Closures and higher-order functions
+- [ ] Compile-time computation
+- [ ] Concurrency primitives
 
 ## License
 
@@ -276,25 +329,33 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 
 The compiler follows a traditional multi-stage architecture:
 
-1. **Lexical Analysis** (`tokenizer.rs`) - Converts source code into tokens
-2. **Syntax Analysis** (`ast.rs`) - Builds an Abstract Syntax Tree
-3. **Semantic Analysis** - Type checking and symbol resolution
-4. **Code Generation** (`llvm.rs`) - Generates LLVM IR
-5. **Optimization** - LLVM optimizations (handled by LLVM)
-6. **Code Emission** - Final machine code (handled by LLVM)
+1. **Lexical Analysis** (`tokenizer.rs`) - Converts source code into tokens ✅
+2. **Syntax Analysis** (`ast.rs`) - Builds an Abstract Syntax Tree ✅  
+3. **Semantic Analysis** - Type checking and symbol resolution ⚠️ (partial)
+4. **Code Generation** (`llvm.rs`) - Generates LLVM IR ⚠️ (basic features work)
+5. **Optimization** - LLVM optimizations (handled by LLVM) ✅
+6. **Code Emission** - Final machine code (handled by LLVM) ✅
+
+The current implementation successfully handles the lexical and syntax analysis phases for all planned language features. The LLVM code generation backend works well for basic operations but needs completion for advanced features like function calls and method dispatch.
 
 ## Future Roadmap
 
-- [x] Type casting with `as` keyword
+### Language Features
+- [x] Type casting with `as` keyword  
 - [x] Implicit type coercion for compatible types
+- [x] Basic I/O operations (printf)
 - [ ] Advanced type system with generics
-- [ ] Module system and imports
+- [ ] Module system and imports  
 - [ ] Standard library
-- [x] Print statements and I/O operations
 - [ ] Pattern matching
 - [ ] Closures and higher-order functions
 - [ ] Compile-time computation
 - [ ] Concurrency primitives
+
+### Implementation Status
+- ✅ **Complete**: Basic expressions, variables, control flow, type operations
+- 🚧 **Partial**: Functions, classes (parsing complete, codegen incomplete) 
+- 📋 **Planned**: Advanced features listed above
 
 ## Contact
 
