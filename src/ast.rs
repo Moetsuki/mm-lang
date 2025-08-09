@@ -439,7 +439,10 @@ impl Ast {
         if let Some(lexical_token) = self.next_token() {
             match &lexical_token.token {
                 Token::Identifier(type_name) => {
-                    Type::from_str(type_name).unwrap_or_else(|_| Type::UserType(type_name.clone()))
+                    Type::from_str(type_name).expect(&format!(
+                        "Unknown type `{}` at line {}, column {}",
+                        type_name, lexical_token.line, lexical_token.column
+                    ))
                 }
                 _ => panic!(
                     "Expected a type identifier, found {:?} at line {}, column {}",

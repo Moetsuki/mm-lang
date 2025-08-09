@@ -168,7 +168,7 @@ impl Register {
             Type::U64 => "i64".to_string(),
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
-            Type::String => "i8*".to_string(),
+            Type::String => "ptr".to_string(),
             Type::NoneType => "void".to_string(),
             Type::ToBeEvaluated => "i64".to_string(),
             _ => panic!("Unsupported type {} for LLVM register", self.var_type),
@@ -656,6 +656,7 @@ impl LLVM {
                     let var_info = Variable {
                         name: name.clone(),
                         var_type: Type::Function {
+                            name: name.clone(),
                             args: params.iter().map(|p| p.var_type.clone()).collect(),
                             ret_type: Box::new(ret_type.clone()),
                             is_variadic: false,
@@ -936,7 +937,7 @@ impl LLVM {
                             }
 
                             let signature =
-                                format!("{} ({})*", return_type, param_types.join(", "));
+                                format!("{}({})", return_type, param_types.join(", "));
                             method_sigs.push((signature, class_name.to_string(), name.to_string()));
                         } else {
                             panic!("Expected function statement for class method");
@@ -977,8 +978,17 @@ impl LLVM {
                             // Generate function signature
                             let return_type_llvm = self.type_to_llvm(&ret_type);
 
+                            // Create a register for `self` (the class instance)
+                            let self_register =
+                                Register::new(Type::Pointer(Box::new(Type::Class {
+                                    name: class_def.name(),
+                                    parent: None,
+                                    fields: vec![],  // You can populate this if needed
+                                    methods: vec![], // You can populate this if needed
+                                })));
+
                             // Add `self` as the first parameter
-                            let mut param_str = "ptr %self".to_string();
+                            let mut param_str = format!("ptr %{}", self_register.to_string());
                             if !params.is_empty() {
                                 let params_str = params
                                     .iter()
@@ -999,12 +1009,6 @@ impl LLVM {
                             self.scope.enter_scope(); 
 
                             // Push `self` to the function scope
-                            let self_register =
-                                Register::new(Type::Pointer(Box::new(Type::Class {
-                                    parent: None,
-                                    fields: vec![],  // You can populate this if needed
-                                    methods: vec![], // You can populate this if needed
-                                })));
                             self.scope.insert(
                                 self_register.clone(),
                                 Variable {
@@ -1438,12 +1442,20 @@ impl LLVM {
                             _ => panic!("Expected class statement for 'self'"),
                         }));
 
-                        let self_register = Register::new(class_type);
+                        // Find `self` from the current variable scope
+                        let self_register = self
+                            .scope
+                            .find(&Variable {
+                                name: "self".to_string(),
+                                var_type: class_type.clone(),
+                            })
+                            .expect("Expected 'self' variable in class scope");
+
                         Evaluation {
                             prologue: IR::new(),
                             epilogue: IR::new(),
-                            register: self_register,
-                            current_class_context: Some(*class_scope.clone()),
+                            register: self_register.clone(),
+                            current_class_context: self.current_class_scope.as_deref().cloned(),
                             current_struct_context: None,
                         }
                     }
@@ -1466,32 +1478,37 @@ impl LLVM {
                     _ => panic!("Field access on non-pointer type"),
                 };
 
-                // Ensure the field exists in the class
-                let field =
-                    object_eval
-                        .current_class_context
-                        .as_ref()
-                        .and_then(|c| match &c.statement {
-                            Statement::Class { fields, .. } => fields
-                                .iter()
-                                .enumerate()
-                                .find(|(_, (f, _))| f.name == field)
-                                .map(|(i, (f, _))| (i, f.clone())),
-                            _ => None,
-                        });
+                // Walk class hierarchy to find the field and remember which class owns it
+                let mut found: Option<(usize, Variable, Class)> = None;
+                let mut class_cursor = object_eval.current_class_context.clone();
 
-                let (field_index, field_var) = match field {
-                    Some((index, f)) => (index, f),
-                    None => panic!("Field '{:?}' not found in class", field),
+                while let Some(class_def) = class_cursor.clone() {
+                    if let Statement::Class { fields, .. } = &class_def.statement {
+                        if let Some((i, (var, _vis))) =
+                            fields.iter().enumerate().find(|(_, (f, _))| f.name == field)
+                        {
+                            found = Some((i, var.clone(), class_def.clone()));
+                            break;
+                        }
+                    }
+                    // Move to parent
+                    class_cursor = class_def.parent.as_ref().map(|p| (*p.clone()));
+                }
+
+                let (field_index, field_var, field_class) = match found {
+                    Some(t) => t,
+                    None => panic!("Field '{}' not found in class hierarchy", field),
                 };
+                // field_class currently unused; keep for future logic
+                let _owning_class = field_class.clone();
 
                 // Generate GEP instruction to get the field pointer
                 let field_ptr_register =
-                    Register::new(Type::Pointer(Box::new(field_var.var_type.clone())));
+                    Register::new(field_var.var_type.clone());
                 eval.epilogue.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
                     field_ptr_register.to_string(),
-                    self.type_to_llvm(&object_eval.register.var_type),
+                    field_class.name,
                     object_eval.register.to_string(),
                     field_index
                 ));
@@ -1689,6 +1706,7 @@ impl LLVM {
             args,
             ret_type,
             is_variadic,
+            ..
         } = function
         {
             let return_type = self.type_to_llvm(ret_type);
@@ -1733,6 +1751,7 @@ impl LLVM {
             Variable {
                 name: "printf".to_string(),
                 var_type: Type::Function {
+                    name: "printf".to_string(),
                     args: vec![Type::String],
                     ret_type: Box::new(Type::I32),
                     is_variadic: true,
@@ -1746,6 +1765,7 @@ impl LLVM {
             Variable {
                 name: "scanf".to_string(),
                 var_type: Type::Function {
+                    name: "scanf".to_string(),
                     args: vec![Type::String],
                     ret_type: Box::new(Type::I32),
                     is_variadic: true,
@@ -1759,6 +1779,7 @@ impl LLVM {
             Variable {
                 name: "malloc".to_string(),
                 var_type: Type::Function {
+                    name: "malloc".to_string(),
                     args: vec![Type::I64],
                     ret_type: Box::new(Type::Pointer(Box::new(Type::I8))),
                     is_variadic: false,
@@ -1771,6 +1792,7 @@ impl LLVM {
             Variable {
                 name: "free".to_string(),
                 var_type: Type::Function {
+                    name: "free".to_string(),
                     args: vec![Type::Pointer(Box::new(Type::I8))],
                     ret_type: Box::new(Type::NoneType),
                     is_variadic: false,
@@ -1813,10 +1835,11 @@ impl LLVM {
                     .iter()
                     .map(|(method, visibility)| {
                         if let Statement::Function {
-                            ret_type, params, ..
+                            name, ret_type, params, ..
                         } = method.as_ref()
                         {
                             let method_type = Type::Function {
+                                name: name.clone(),
                                 args: params.iter().map(|p| p.var_type.clone()).collect(),
                                 ret_type: Box::new(ret_type.clone()),
                                 is_variadic: false,
@@ -1829,6 +1852,7 @@ impl LLVM {
                     .collect();
 
                 Type::Class {
+                    name: class_name.to_string(),
                     parent: parent_type,
                     fields: field_types,
                     methods: method_types,

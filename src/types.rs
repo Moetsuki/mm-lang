@@ -18,21 +18,24 @@ pub enum Type {
     String,
     NoneType,
     Function {
+        name: String,
         args: Vec<Type>, 
         ret_type: Box<Type>,
         is_variadic: bool,
     },
     Class {
+        name: String,
         parent: Option<Box<Type>>,
         fields: Vec<(Box<Type>, Visibility)>,
         methods: Vec<(Box<Type>, Visibility)>,
     },
     Struct {
+        name: String,
         parent: Option<Box<Type>>,
         fields: Vec<Box<Type>>,
     },
     Array(Box<Type>),
-    UserType(String),
+    UserType(String, Box<Type>),
     Pointer(Box<Type>),
     ToBeEvaluated,
 }
@@ -70,7 +73,7 @@ impl Display for Type {
             Type::F64 => "f64".to_string(),
             Type::String => "string".to_string(),
             Type::NoneType => "none".to_string(),
-            Type::Function { args, ret_type, is_variadic } => {
+            Type::Function { name, args, ret_type, is_variadic } => {
                 let params_str = args
                     .iter()
                     .map(|t| t.to_string())
@@ -78,13 +81,14 @@ impl Display for Type {
                     .join(", ");
                 let variadic_str = if *is_variadic { ", ..." } else { "" };
                 format!(
-                    "function ({}{}) -> {}",
+                    "function {}({}{}) -> {}",
+                    name,
                     params_str,
                     variadic_str,
                     ret_type.to_string()
                 )
             },
-            Type::Class { parent, fields, methods } => {
+            Type::Class { name, parent, fields, methods } => {
                 let parent_str = if let Some(p) = parent {
                     format!(" extends {}", p)
                 } else {
@@ -101,11 +105,14 @@ impl Display for Type {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
-                    "class{} {{ fields: [{}], methods: [{}] }}",
-                    parent_str, fields_str, methods_str
+                    "class {}{} {{ fields: [{}], methods: [{}] }}",
+                    name, 
+                    parent_str,
+                    fields_str, 
+                    methods_str
                 )
             },
-            Type::Struct { parent, fields } => {
+            Type::Struct { name, parent, fields } => {
                 let parent_str = if let Some(p) = parent {
                     format!(" extends {}", p)
                 } else {
@@ -116,11 +123,13 @@ impl Display for Type {
                     .map(|field| field.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("struct{} {{ fields: [{}] }}", parent_str, fields_str)
+                format!("struct {}{} {{ fields: [{}] }}", name, parent_str, fields_str)
             },
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
             Type::Pointer(inner_type) => format!("ptr<{}>", inner_type.to_string()),
-            Type::UserType(name) => name.clone(),
+            Type::UserType(name, typ) => {
+                format!("usertype {} <{}>", name, typ.to_string())
+            },
             Type::ToBeEvaluated => "TBE".to_string(),
         };
         write!(f, "{}", fmtstr)
@@ -178,14 +187,16 @@ impl Hash for Type {
                 args.hash(state);
                 ret_type.hash(state);
             }
-            Type::Class { parent, fields, methods } => {
+            Type::Class { name, parent, fields, methods } => {
+                name.hash(state);
                 if let Some(p) = parent {
                     p.hash(state);
                 }
                 fields.hash(state);
                 methods.hash(state);
             }
-            Type::Struct { parent, fields } => {
+            Type::Struct { name, parent, fields } => {
+                name.hash(state);
                 if let Some(p) = parent {
                     p.hash(state);
                 }
@@ -197,7 +208,10 @@ impl Hash for Type {
                 inner_type.hash(state);
                 ">".hash(state);
             }
-            Type::UserType(name) => name.hash(state),
+            Type::UserType(name, typ) => {
+                name.hash(state);
+                typ.hash(state);
+            }
             Type::ToBeEvaluated => "TBE".hash(state),
         }
     }
