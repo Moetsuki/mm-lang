@@ -13,17 +13,17 @@ MM-Lang is a small, statically‑typed, expression–oriented language with C / 
 - Blocks, if / else control flow
 - Basic I/O operations via `printf` binding
 - String literals (lowered to C strings)
+- Function definitions and function calls (basic functionality working)
 
 **Partially Working Features:**
-- Single inheritance classes with fields and visibility modifiers (AST parsing works)
-- Constructor syntax via `init { ... }` blocks (parsed but LLVM codegen incomplete)
+- Single inheritance classes with fields and visibility modifiers (AST parsing works, simple class definitions compile)
+- Constructor syntax via `init { ... }` blocks (parsed but LLVM codegen has limitations)
 
 **In Development:**
-- First‑class functions with parameters & return types (parsing works, LLVM codegen has issues)
-- Method calls and field access (parsing works, codegen incomplete)
-- Function calls (parsing works, codegen incomplete)
+- Method calls and field access (parsing works, codegen has issues with complex inheritance)
+- Advanced class features like proper vtable inheritance and method dispatch
 
-> NOTE: The compiler successfully parses most language constructs and generates LLVM IR for basic operations, but advanced features like classes, functions, and method calls are still under development in the LLVM backend.
+> NOTE: The compiler successfully parses most language constructs and generates LLVM IR for basic operations, functions, and simple classes. Advanced features like complex class inheritance and method calls are still under development in the LLVM backend.
 
 ## Core Features
 
@@ -39,7 +39,7 @@ x = y + 2;
 ```
 Variables must be declared before use. Re‑assignment omits the type.
 
-### Functions ⚠️
+### Functions ✅
 ```mm
 function add(a: i64, b: i64) -> i64 {
     return a + b;
@@ -47,7 +47,7 @@ function add(a: i64, b: i64) -> i64 {
 
 result: i64 = add(10, 32);
 ```
-Function parsing is complete, but LLVM code generation is not fully implemented.
+Function definitions and basic function calls are working. Return statements are supported.
 
 ### Control Flow ✅
 ```mm
@@ -155,10 +155,10 @@ program          = { statement } ;
 
 statement        = variable_decl        (* ✅ Working *)
                  | assignment           (* ✅ Working for variables *)
-                 | function_def         (* ⚠️ Parsing works, codegen incomplete *)
-                 | class_decl           (* ⚠️ Parsing works, codegen incomplete *) 
+                 | function_def         (* ✅ Working *)
+                 | class_decl           (* ⚠️ Parsing works, simple classes compile *) 
                  | if_statement         (* ✅ Working *)
-                 | return_statement     (* ⚠️ Parsing works, codegen incomplete *)
+                 | return_statement     (* ✅ Working *)
                  | expression_stmt      (* ⚠️ Limited support *)
                  | block ;              (* ✅ Working *)
 
@@ -166,10 +166,10 @@ block            = "{" { statement } "}" ;                    (* ✅ Working *)
 
 variable_decl    = identifier ":" type "=" expression ";" ;   (* ✅ Working *)
 assignment       = expression "=" expression ";" ;           (* ⚠️ Variables only *)
-return_statement = "return" expression ";" ;                 (* ⚠️ Parsed but not codegen *)
+return_statement = "return" expression ";" ;                 (* ✅ Working *)
 expression_stmt  = expression ";" ;                          (* ⚠️ Basic expressions only *)
 
-function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ⚠️ *)
+function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ✅ Working *)
 param_list       = param { "," param } ;
 param            = identifier ":" type ;
 
@@ -189,8 +189,8 @@ expression       = method_call          (* ⚠️ Parsed only *)
                  | call                 (* ⚠️ Parsed only *)
                  | binary ;             (* ✅ Working *)
 
-method_call      = primary "." identifier "(" [ arg_list ] ")" ; (* ⚠️ *)
-call             = primary "(" [ arg_list ] ")" ;                (* ⚠️ *)
+method_call      = primary "." identifier "(" [ arg_list ] ")" ; (* ❌ Parsing works, codegen fails *)
+call             = primary "(" [ arg_list ] ")" ;                (* ✅ Working *)
 arg_list         = expression { "," expression } ;
 
 binary           = unary { bin_op unary } ;                  (* ✅ Working *)
@@ -253,16 +253,21 @@ cargo run
 - ✅ Control flow: if/else statements, blocks, scoping
 - ✅ Unary operations and string literals
 - ✅ C interop: printf function calls
+- ✅ Function definitions and basic function calls
+- ✅ Simple class definitions (without complex inheritance)
 
 ### Known Issues
-- ❌ **Function definitions and calls**: Parsing works but LLVM codegen fails with register resolution
-- ❌ **Class instantiation and method calls**: AST generation complete but LLVM backend incomplete
-- ❌ **Field access operations**: Expression parsing works but codegen not implemented  
-- ❌ **Return statements**: Not properly handled in LLVM generation
-- ⚠️ **Type system**: Some edge cases in type conversion and inference
+- ❌ **Complex class inheritance**: Field resolution fails with multi-level inheritance
+- ❌ **Method calls**: Type conversion issues in method dispatch
+- ❌ **Field access operations**: Some codegen limitations for object field access
+- ⚠️ **Type system**: Some edge cases in automatic type conversion for complex objects
 
 ### Debug Information
 The compiler provides detailed AST output and LLVM IR generation traces. Failed tests show exactly where in the compilation pipeline issues occur, making it easy to track progress on incomplete features.
+
+### Specific Test Failure Details
+- **`test_class`**: Fails during complex inheritance field resolution - "Field 'id' not found in class 'Animal'" when trying to access inherited fields from parent classes
+- **`test_method_call`**: Fails with "Unsupported automatic conversion from ptr to i32" during method dispatch, indicating type system issues with object references
 
 ## Testing
 
@@ -273,8 +278,8 @@ cargo test
 ```
 
 ### Test Results Overview:
-- ✅ **Passing (9 tests)**: Basic variable declarations, arithmetic operations, type coercion/casting, unary operations, control flow (if/else), blocks, and printf output
-- ❌ **Failing (5 tests)**: Functions, function calls, classes, method calls - these features are partially implemented in parsing but have incomplete LLVM code generation
+- ✅ **Passing (12 tests)**: Basic variable declarations, arithmetic operations, type coercion/casting, unary operations, control flow (if/else), blocks, printf output, functions, function calls, and simple classes
+- ❌ **Failing (2 tests)**: Complex classes with inheritance, method calls - these features have parsing implemented but encounter LLVM code generation issues
 
 ### Individual Test Status:
 - `test_variable_declaration` ✅
@@ -286,11 +291,11 @@ cargo test
 - `test_if_statement` ✅
 - `test_block` ✅
 - `test_printf` ✅
-- `test_function` ❌ (LLVM codegen incomplete)
-- `test_function_call` ❌ (LLVM codegen incomplete)
-- `test_class` ❌ (LLVM codegen incomplete)
-- `test_simple_class` ❌ (LLVM codegen incomplete)  
-- `test_method_call` ❌ (LLVM codegen incomplete)
+- `test_function` ✅
+- `test_function_call` ✅
+- `test_simple_class` ✅
+- `test_class` ❌ (Complex inheritance - field resolution issues)
+- `test_method_call` ❌ (Type conversion issues in method dispatch)
 
 ## Roadmap
 
@@ -300,13 +305,16 @@ cargo test
 - [x] Implicit widening & explicit casting
 - [x] Unary operators
 - [x] Strings & printf binding
+- [x] Function definitions and basic function calls
+- [x] Return statements
+- [x] Simple class definitions
 - [x] Class AST parsing & visibility modifiers
 - [x] Constructor `init` block parsing
 - [x] Inheritance parsing
 
 ### 🚧 In Progress  
-- [ ] Complete function LLVM code generation
-- [ ] Complete method calls and field access LLVM codegen
+- [ ] Complex multi-level class inheritance (field resolution issues)
+- [ ] Method calls and field access (type conversion challenges)
 - [ ] Proper vtable inheritance & method dispatch
 - [ ] Constructor/destructor end-to-end implementation
 
@@ -331,12 +339,12 @@ The compiler follows a traditional multi-stage architecture:
 
 1. **Lexical Analysis** (`tokenizer.rs`) - Converts source code into tokens ✅
 2. **Syntax Analysis** (`ast.rs`) - Builds an Abstract Syntax Tree ✅  
-3. **Semantic Analysis** - Type checking and symbol resolution ⚠️ (partial)
-4. **Code Generation** (`llvm.rs`) - Generates LLVM IR ⚠️ (basic features work)
+3. **Semantic Analysis** - Type checking and symbol resolution ⚠️ (works for basic features, issues with complex inheritance)
+4. **Code Generation** (`llvm.rs`) - Generates LLVM IR ✅ (works for most features, specific issues with inheritance field resolution and method dispatch)
 5. **Optimization** - LLVM optimizations (handled by LLVM) ✅
 6. **Code Emission** - Final machine code (handled by LLVM) ✅
 
-The current implementation successfully handles the lexical and syntax analysis phases for all planned language features. The LLVM code generation backend works well for basic operations but needs completion for advanced features like function calls and method dispatch.
+The current implementation successfully handles the lexical and syntax analysis phases for all planned language features. The LLVM code generation backend works well for functions, simple classes, and all basic operations but encounters specific issues with complex class inheritance field resolution and method call type conversion.
 
 ## Future Roadmap
 
@@ -353,8 +361,8 @@ The current implementation successfully handles the lexical and syntax analysis 
 - [ ] Concurrency primitives
 
 ### Implementation Status
-- ✅ **Complete**: Basic expressions, variables, control flow, type operations
-- 🚧 **Partial**: Functions, classes (parsing complete, codegen incomplete) 
+- ✅ **Complete**: Basic expressions, variables, control flow, type operations, functions, simple classes
+- 🚧 **Partial**: Complex class inheritance, method calls (parsing complete, codegen has specific issues) 
 - 📋 **Planned**: Advanced features listed above
 
 ## Contact
