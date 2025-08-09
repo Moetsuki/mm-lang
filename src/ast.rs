@@ -175,7 +175,10 @@ impl Ast {
                                             value: *right,
                                         });
                                     } else {
-                                        panic!("Unexpected binary operator `{}` in method call context", op);
+                                        panic!(
+                                            "Unexpected binary operator `{}` in method call context",
+                                            op
+                                        );
                                     }
                                 } else {
                                     panic!("Expected a BinaryOp for method call, found {:?}", expr);
@@ -335,13 +338,18 @@ impl Ast {
                                 // Handle special init/destroy methods
                                 constructor_defined = true;
                                 let method = self.parse_constructor_destructor(class_name.clone());
-                                methods.push((Box::new(method), Visibility::Public));
+                                methods.insert(0, (Box::new(method), Visibility::Public));
                             }
                             Token::Keyword(keyword) if keyword == "destroy" => {
                                 // Handle special init/destroy methods
                                 destructor_defined = true;
                                 let method = self.parse_constructor_destructor(class_name.clone());
-                                methods.push((Box::new(method), Visibility::Public));
+                                methods.insert(
+                                    // Insert it at index 0 if we have only a destructor
+                                    // The default constructor will be pushed in front of it anyway later.
+                                    if methods.is_empty() { 0 } else { 1 }, 
+                                    (Box::new(method), Visibility::Public)
+                                );
                             }
                             Token::Newline => {
                                 // Ignore newlines
@@ -356,25 +364,28 @@ impl Ast {
 
                     // If no constructor is defined, we define a default one
                     if !constructor_defined {
-                        methods.push((Box::new(
-                            Statement::Function {
+                        methods.insert(0, (
+                            Box::new(Statement::Function {
                                 name: format!("__{}_init", class_name),
                                 ret_type: Type::NoneType,
                                 params: Vec::new(),
                                 body: Block::new(Vec::new()),
-                            }
-                        ), Visibility::Public));
+                            }),
+                            Visibility::Public,
+                        ));
                     }
 
+                    // If no destructor is defined, we define a default one
                     if !destructor_defined {
-                        methods.push((Box::new(
-                            Statement::Function {
+                        methods.insert(1, (
+                            Box::new(Statement::Function {
                                 name: format!("__{}_destroy", class_name),
                                 ret_type: Type::NoneType,
                                 params: Vec::new(),
                                 body: Block::new(Vec::new()),
-                            }
-                        ), Visibility::Public));
+                            }),
+                            Visibility::Public,
+                        ));
                     }
 
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
@@ -566,25 +577,46 @@ impl Ast {
                             self.next_token(); // Consume the '.'
 
                             // After the dot we expect an identifier
-                            if let Some(next_token) = self.next_token() {
-                                if let Token::Identifier(method_name) = &next_token.token {
-                                    expr = Expression::Method {
-                                        object: Box::new(expr),
-                                        method: Box::new(Expression::Variable(Variable {
-                                            name: method_name.clone(),
-                                            var_type: Type::ToBeEvaluated,
-                                        })),
-                                    };
+                            if let Some(tok) = self.next_token() {
+                                let method_name = if let Token::Identifier(name) = &tok.token {
+                                    name.clone()
                                 } else {
                                     panic!(
                                         "Expected method name after '.', found {:?} at line {}, column {}",
-                                        next_token.token, next_token.line, next_token.column
+                                        tok.token, tok.line, tok.column
                                     );
+                                };
+                                // End borrow of tok before further borrowing self
+                                let _ = tok;
+
+                                // Determine if this is a method call (next token is '(') or a field access
+                                let is_method_call = matches!(
+                                    self.peek_token(),
+                                    Some(next_next_token)
+                                        if next_next_token.token == Token::Punctuation("(".to_string())
+                                );
+
+                                if is_method_call {
+                                    self.expect(&Token::Punctuation("(".to_string()));
+                                    let args = self.parse_args();
+                                    self.expect(&Token::Punctuation(")".to_string()));
+                                    expr = Expression::MethodCall {
+                                        object: Box::new(expr),
+                                        method: method_name,
+                                        args,
+                                    };
+                                } else {
+                                    expr = Expression::FieldAccess {
+                                        object: Box::new(expr),
+                                        field: method_name,
+                                    };
                                 }
                             } else {
-                                panic!("Expected method name after '.', but no more tokens available");
+                                panic!(
+                                    "Expected method name after '.', but no more tokens available"
+                                );
                             }
-                            
+
                             // Do not give control to the caller by breaking, continue parsing
                         }
                         "(" => {
@@ -597,14 +629,6 @@ impl Ast {
                                 expr = Expression::Call {
                                     callee: Box::new(callee),
                                     args,
-                                };
-                            } else if let Expression::Method { object, method } = expr {
-                                expr = Expression::Call {
-                                    callee: Box::new(Expression::Method {
-                                        object,
-                                        method,
-                                    }),
-                                    args: self.parse_args(),
                                 };
                             } else {
                                 panic!("Expected a variable before '(', found {:?}", expr);
@@ -619,7 +643,7 @@ impl Ast {
                             break; // Let caller handle unexpected punctuation
                         }
                     }
-                } 
+                }
                 _ => {
                     break; // End of expression for any other token type
                 }
@@ -694,6 +718,85 @@ impl Ast {
             panic!("Expected function name, but no more tokens available");
         };
         self.expect(&Token::Punctuation("(".to_string()));
+        let params = self.parse_function_call_params();
+        self.expect(&Token::Punctuation(")".to_string()));
+
+        let mut ret_type: Type;
+        if let Some(arrow_token) = self.peek_token() {
+            if arrow_token.token == Token::Punctuation("->".to_string()) {
+                self.next_token(); // consume '->'
+                ret_type = self.parse_type();
+            } else {
+                ret_type = Type::NoneType;
+            }
+        } else {
+            ret_type = Type::NoneType;
+        }
+        self.expect(&Token::Punctuation("{".to_string()));
+        let body = self.parse();
+        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+        Statement::Function {
+            name,
+            ret_type,
+            params,
+            body,
+        }
+    }
+
+    fn parse_constructor_destructor(&mut self, class_name: String) -> Statement {
+        let mut is_constructor;
+        let mut is_destructor;
+
+        let name = if let Some(lexical_token) = self.next_token() {
+            if let Token::Keyword(keyword) = &lexical_token.token {
+                is_constructor = keyword == "init";
+                is_destructor = keyword == "destroy";
+
+                if is_constructor || is_destructor {
+                    format!("__{}_{}", class_name, keyword)
+                } else {
+                    panic!(
+                        "Expected 'init' or 'destroy', found {:?} at line {}, column {}",
+                        lexical_token.token, lexical_token.line, lexical_token.column
+                    );
+                }
+            } else {
+                panic!(
+                    "Expected constructor/destructor name, found {:?} at line {}, column {}",
+                    lexical_token.token, lexical_token.line, lexical_token.column
+                );
+            }
+        } else {
+            panic!("Expected constructor/destructor, but no more tokens available");
+        };
+
+        let mut params = Vec::new();
+
+        // Check if the next token is a parenthesis, which means we have parameters
+        if let Some(next_token) = self.peek_token()
+            && is_constructor
+        {
+            if next_token.token == Token::Punctuation("(".to_string()) {
+                self.next_token(); // consume '('
+                params = self.parse_function_call_params();
+                self.expect(&Token::Punctuation(")".to_string())); // consume ')'
+            }
+        }
+
+        self.expect(&Token::Punctuation("{".to_string()));
+        let body = self.parse();
+        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+        Statement::Function {
+            name,
+            ret_type: Type::NoneType, // Constructors and destructors do not return a value
+            params,
+            body,
+        }
+    }
+
+    fn parse_function_call_params(&mut self) -> Vec<Variable> {
         let mut params = Vec::new();
         loop {
             if let Some(lexical_token) = self.peek_token() {
@@ -722,73 +825,6 @@ impl Ast {
                 break;
             }
         }
-        self.expect(&Token::Punctuation(")".to_string()));
-
-        let mut ret_type: Type;
-        if let Some(arrow_token) = self.peek_token() {
-            if arrow_token.token == Token::Punctuation("->".to_string()) {
-                self.next_token(); // consume '->'
-                ret_type = self.parse_type();
-            } else {
-                ret_type = Type::NoneType;
-            }
-        } else {
-            ret_type = Type::NoneType;
-        }
-        self.expect(&Token::Punctuation("{".to_string()));
-        let body = self.parse();
-        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-
-        Statement::Function {
-            name,
-            ret_type,
-            params,
-            body,
-        }
-    }
-
-
-    fn parse_constructor_destructor(&mut self, class_name: String) -> Statement {
-        let name = if let Some(lexical_token) = self.next_token() {
-            if let Token::Keyword(keyword) = &lexical_token.token {
-                if keyword == "init" || keyword == "destroy" {
-                    format!("__{}_{}", class_name, keyword)
-                } else {
-                    panic!(
-                        "Expected 'init' or 'destroy', found {:?} at line {}, column {}",
-                        lexical_token.token, lexical_token.line, lexical_token.column
-                    );
-                }
-            } else {
-                panic!(
-                    "Expected constructor/destructor name, found {:?} at line {}, column {}",
-                    lexical_token.token, lexical_token.line, lexical_token.column
-                );  
-            }
-        } else {
-            panic!("Expected constructor/destructor, but no more tokens available");
-        };
-
-        let mut ret_type: Type;
-        if let Some(arrow_token) = self.peek_token() {
-            if arrow_token.token == Token::Punctuation("->".to_string()) {
-                self.next_token(); // consume '->'
-                ret_type = self.parse_type();
-            } else {
-                ret_type = Type::NoneType;
-            }
-        } else {
-            ret_type = Type::NoneType;
-        }
-        self.expect(&Token::Punctuation("{".to_string()));
-        let body = self.parse();
-        self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-
-        Statement::Function {
-            name,
-            ret_type,
-            params: Vec::new(),
-            body,
-        }
+        params
     }
 }
