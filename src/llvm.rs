@@ -621,65 +621,60 @@ impl LLVM {
                     return None; // No evaluation for function definitions
                 }
                 Statement::Call { callee, args } => {
-                    // Get function name from callee
-                    let func_name = match callee {
-                        Expression::Variable(var) => var.name.clone(),
-                        _ => panic!("Function calls must use variable names"),
-                    };
-
-                    // Look up function in global scope to get return type and parameter types
-                    let func_var = self.scope.find_function(&func_name).expect(&format!(
-                        "Function '{}' not found in global scope",
-                        func_name
-                    ));
-
-                    let param_types = if let Type::Function { args, .. } = &func_var.var_type {
-                        args.clone()
-                    } else {
-                        panic!("Expected function type for '{}'", func_name);
-                    };
-
-                    // Generate function signature
-                    let signature = self.generate_function_signature(
-                        func_var.name.clone(),
-                        &func_var.var_type.clone(),
-                        false,
-                        false,
-                    );
-
-                    // Handle function call arguments
-                    let mut arg_evals = Vec::new();
-                    for arg in args {
-                        let arg_eval = self.transform_expression(arg.clone());
-                        eval.prologue
-                            .instructions
-                            .extend(arg_eval.prologue.instructions.clone());
-                        eval.prologue
-                            .instructions
-                            .extend(arg_eval.epilogue.instructions.clone());
-                        arg_evals.push(arg_eval);
+                    match callee {
+                        Expression::Variable(var_expr) => {
+                            // existing function call logic
+                            let func_name = var_expr.name.clone();
+                            let func_var = self.scope.find_function(&func_name).expect(&format!(
+                                "Function '{}' not found in global scope",
+                                func_name
+                            ));
+                            let param_types =
+                                if let Type::Function { args, .. } = &func_var.var_type {
+                                    args.clone()
+                                } else {
+                                    panic!("Expected function type for '{}'", func_name);
+                                };
+                            let signature = self.generate_function_signature(
+                                func_var.name.clone(),
+                                &func_var.var_type.clone(),
+                                false,
+                                false,
+                            );
+                            let mut arg_evals = Vec::new();
+                            for arg in args {
+                                let arg_eval = self.transform_expression(arg.clone());
+                                eval.prologue
+                                    .instructions
+                                    .extend(arg_eval.prologue.instructions.clone());
+                                eval.prologue
+                                    .instructions
+                                    .extend(arg_eval.epilogue.instructions.clone());
+                                arg_evals.push(arg_eval);
+                            }
+                            let args_str = arg_evals
+                                .iter()
+                                .zip(param_types.iter())
+                                .map(|(arg_eval, param_type)| {
+                                    format!(
+                                        "{} %{}",
+                                        self.type_to_llvm(param_type),
+                                        arg_eval.register.to_string()
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            eval.epilogue.push(format!(
+                                "%{} = call {}({})",
+                                eval.register.to_string(),
+                                signature,
+                                args_str
+                            ));
+                        }
+                        _ => {
+                            panic!("Unsupported callee expression in function call: {:?}", callee);
+                        }
                     }
-
-                    // Generate function call with proper types
-                    let args_str = arg_evals
-                        .iter()
-                        .zip(param_types.iter())
-                        .map(|(arg_eval, param_type)| {
-                            format!(
-                                "{} %{}",
-                                self.type_to_llvm(param_type),
-                                arg_eval.register.to_string()
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    eval.epilogue.push(format!(
-                        "%{} = call {}({})",
-                        eval.register.to_string(),
-                        signature,
-                        args_str
-                    ));
                 }
                 Statement::Return { value } => {
                     let return_eval = self.transform_expression(value.clone());
@@ -795,21 +790,29 @@ impl LLVM {
 
                     // Define the class type
                     self.prologue.push(format!(
-                        "%{} = type {{ %{}VTable*{}{} }}",
+                        "%{} = type {{\n  %{}VTable*{}{}\n}}",
                         class_def.name(),
                         class_def.name(),
-                        if fields.is_empty() { "" } else { ", " },
+                        if fields.is_empty() { "\n" } else { ",\n" },
                         fields
                             .iter()
-                            .map(|(f, _)| self.type_to_llvm(&f.var_type))
+                            .enumerate()
+                            .map(|(i, (f, _))| {
+                                let comma = if i + 1 < fields.len() { "," } else { "" };
+                                format!("  {:<35} ; {}::{}", 
+                                    format!("{}{}",self.type_to_llvm(&f.var_type), comma),
+                                    class_def.name(),
+                                    f.name.clone()
+                                )
+                            })
                             .collect::<Vec<_>>()
-                            .join(", ")
+                            .join("\n")
                     ));
 
                     // Find the constructor function for the class
-                    let constructor_name = format!("__{}__init", class_def.name());
-                    let destructor_name = format!("__{}__destroy", class_def.name());
-                    let constructor = methods
+                    let constructor_name = format!("__{}_init", class_def.name());
+                    let destructor_name = format!("__{}_destroy", class_def.name());
+                    let _constructor = methods
                         .iter()
                         .find(|(m, _)| match m.as_ref() {
                             Statement::Function { name, .. } if name == &constructor_name => true,
@@ -819,10 +822,11 @@ impl LLVM {
                         .unwrap_or_else(|| {
                             panic!(
                                 "Constructor '{}' not found for class '{}'",
-                                constructor_name, class_def.name()
+                                constructor_name,
+                                class_def.name()
                             )
                         });
-                    let destructor = methods
+                    let _destructor = methods
                         .iter()
                         .find(|(m, _)| match m.as_ref() {
                             Statement::Function { name, .. } if name == &destructor_name => true,
@@ -832,7 +836,8 @@ impl LLVM {
                         .unwrap_or_else(|| {
                             panic!(
                                 "Destructor '{}' not found for class '{}'",
-                                destructor_name, class_def.name()
+                                destructor_name,
+                                class_def.name()
                             )
                         });
 
@@ -843,55 +848,55 @@ impl LLVM {
                     while let Some(class) = current_class {
                         // Add methods from the current class
                         if let Statement::Class { name, methods, .. } = &class.statement {
+                            // Collect methods from this class
+                            let mut tmp_methods = Vec::new();
                             for method in methods.iter() {
                                 if let Statement::Function { .. } = &method.0.as_ref() {
-                                    all_methods.push((method.clone(), name));
+                                    tmp_methods.push((method.clone(), name));
                                 }
                             }
+                            // Prepend the class methods to the all_methods list
+                            // This ensures that methods from parent classes appear first (on top of the VTable)
+                            all_methods.splice(0..0, tmp_methods);
                         }
                         // Move to the parent class
                         current_class = class.parent.as_deref();
                     }
+                    
+                    // Build VTable entries ensuring commas separate types (before comments)
+                    let mut method_sigs: Vec<(String, String, String)> = Vec::new();
+                    for (method, class_name) in &all_methods {
+                        if let Statement::Function { name, ret_type, params, .. } = method.0.as_ref() {
+                            let return_type = self.type_to_llvm(ret_type);
 
-                    let vt_content = all_methods
-                        .iter()
-                        .map(|(method, class_name)| {
-                            match method.0.as_ref() {
-                                Statement::Function {
-                                    name: _name,
-                                    ret_type,
-                                    params,
-                                    body: _body,
-                                } => {
-                                    let return_type = self.type_to_llvm(&ret_type);
-                                    if params.is_empty() {
-                                        format!("\n\t{} (%{}*)*\t; {}\n", return_type, class_def.name(), class_name)
-                                    } else {
-                                        // For methods, we need to pass `this` as the first parameter
-                                        // followed by the rest of the parameters
-                                        let params_str = params
-                                            .iter()
-                                            .map(|p| self.type_to_llvm(&p.var_type))
-                                            .collect::<Vec<_>>()
-                                            .join(", ");
-                                        format!(
-                                            "\n\t{} (%{}* {})*,\t; {}",
-                                            return_type,
-                                            class_def.name(),
-                                            params_str,
-                                            class_name
-                                        )
-                                    }
-                                }
-                                _ => panic!("Expected function statement for class method"),
+                            // First implicit param is always %ClassName*
+                            let mut param_types: Vec<String> = vec![format!("%{}*", class_def.name())];
+                            for p in params {
+                                param_types.push(self.type_to_llvm(&p.var_type));
                             }
+
+                            let signature = format!("{} ({})*", return_type, param_types.join(", "));
+                            method_sigs.push((signature, class_name.to_string(), name.to_string()));
+                        } else {
+                            panic!("Expected function statement for class method");
+                        }
+                    }
+
+                    let vt_body =
+                        method_sigs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (sig, class_name, func_name))| {
+                            let comma = if i + 1 < method_sigs.len() { "," } else { "" };
+                            format!("  {:<35} ; {}::{}", format!("{}{}", sig, comma), class_name, func_name)
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
+
                     self.prologue.push(format!(
-                        "%{}VTable = type {{ {} }}",
+                        "%{}VTable = type {{\n{}\n}}",
                         class_def.name(),
-                        vt_content
+                        vt_body
                     ));
 
 
@@ -1253,6 +1258,12 @@ impl LLVM {
                 }
 
                 eval.register.var_type = target_type;
+            }
+            Expression::MethodCall { .. } => {
+                // Handle method calls
+                // This will require resolving the object type and method name
+                // For now, we will panic if we encounter this case
+                panic!("Method calls are not yet implemented in LLVM IR transformation");
             }
             _ => {
                 panic!(
