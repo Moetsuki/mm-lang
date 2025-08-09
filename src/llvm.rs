@@ -330,9 +330,9 @@ impl LLVM {
             Type::U64 => "i64".to_string(),
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
-            Type::String => "i8*".to_string(),
+            Type::String => "ptr".to_string(),
             Type::NoneType => "void".to_string(),
-            Type::Pointer(inner_type) => format!("{}*", self.type_to_llvm(inner_type)),
+            Type::Pointer(_) => "ptr".to_string(),
             _ => "i32".to_string(), // Default fallback
         }
     }
@@ -842,8 +842,7 @@ impl LLVM {
                         "%{} = type {{\n  {:<35} {}{}\n}}",
                         class_def.name(),
                         format!(
-                            "%{}VTable*{}",
-                            class_def.name(),
+                            "ptr{}",
                             if fields.is_empty() { "" } else { "," }
                         ),
                         format!("; {}::__VTable\n", class_def.name()),
@@ -931,7 +930,7 @@ impl LLVM {
 
                             // First implicit param is always %ClassName*
                             let mut param_types: Vec<String> =
-                                vec![format!("%{}*", class_def.name())];
+                                vec!["ptr".to_string()];
                             for p in params {
                                 param_types.push(self.type_to_llvm(&p.var_type));
                             }
@@ -948,10 +947,11 @@ impl LLVM {
                         .iter()
                         .enumerate()
                         .map(|(i, (sig, class_name, func_name))| {
-                            let comma = if i + 1 < method_sigs.len() { "," } else { "" };
+                            let comma = if i + 1 < method_sigs.len() { "," } else { " " };
                             format!(
-                                "  {:<35} ; {}::{}",
-                                format!("{}{}", sig, comma),
+                                "  {} ; {:<35} {}::{}",
+                                format!("ptr{}", comma),
+                                sig,
                                 class_name,
                                 func_name
                             )
@@ -978,7 +978,7 @@ impl LLVM {
                             let return_type_llvm = self.type_to_llvm(&ret_type);
 
                             // Add `self` as the first parameter
-                            let mut param_str = format!("%{}* %self", class_def.name());
+                            let mut param_str = "ptr %self".to_string();
                             if !params.is_empty() {
                                 let params_str = params
                                     .iter()
@@ -1098,7 +1098,6 @@ impl LLVM {
             Expression::StringLiteral(value) => {
                 let string_data = StringData::new(value);
 
-                // @.str1001 = private constant [6 x i8] c"hello\00"
                 self.prologue.push(format!(
                     "@.{} = private constant [{} x i8] c\"{}\\00\"\n",
                     string_data.name(),
@@ -1109,11 +1108,9 @@ impl LLVM {
                         .replace("\"", "\\\"")
                 ));
 
-                // %msg = getelementptr [6 x i8], [6 x i8]* @.str, i64 0, i64 0
                 eval.epilogue.push(format!(
-                    "%{} = getelementptr [{} x i8], [{} x i8]* @.{}, i32 0, i32 0",
+                    "%{} = getelementptr [{} x i8], ptr @.{}, i32 0, i32 0",
                     eval.register.to_string(),
-                    string_data.length() + 1,
                     string_data.length() + 1,
                     string_data.name()
                 ));
@@ -1492,9 +1489,8 @@ impl LLVM {
                 let field_ptr_register =
                     Register::new(Type::Pointer(Box::new(field_var.var_type.clone())));
                 eval.epilogue.push(format!(
-                    "%{} = getelementptr %{}, %{}* %{}, i32 0, i32 {}",
+                    "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
                     field_ptr_register.to_string(),
-                    self.type_to_llvm(&object_eval.register.var_type),
                     self.type_to_llvm(&object_eval.register.var_type),
                     object_eval.register.to_string(),
                     field_index
@@ -1731,7 +1727,7 @@ impl LLVM {
     fn generate_c_bindings(&mut self) {
         self.prologue.push("\n; C Bindings".to_string());
         self.prologue
-            .push("declare i32 @printf(i8*, ...)   ;".to_string());
+            .push("declare i32 @printf(ptr, ...)   ;".to_string());
         self.scope.insert_top(
             Register::new(Type::I32),
             Variable {
@@ -1744,7 +1740,7 @@ impl LLVM {
             },
         );
         self.prologue
-            .push("declare i32 @scanf(i8*, ...)   ;".to_string());
+            .push("declare i32 @scanf(ptr, ...)   ;".to_string());
         self.scope.insert_top(
             Register::new(Type::I32),
             Variable {
@@ -1757,7 +1753,7 @@ impl LLVM {
             },
         );
         self.prologue
-            .push("declare i8* @malloc(i64)  ;".to_string());
+            .push("declare ptr @malloc(i64)  ;".to_string());
         self.scope.insert_top(
             Register::new(Type::Pointer(Box::new(Type::I8))),
             Variable {
@@ -1769,7 +1765,7 @@ impl LLVM {
                 },
             },
         );
-        self.prologue.push("declare void @free(i8*)  ;".to_string());
+        self.prologue.push("declare void @free(ptr)  ;".to_string());
         self.scope.insert_top(
             Register::new(Type::NoneType),
             Variable {
