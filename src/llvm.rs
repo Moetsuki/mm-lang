@@ -790,10 +790,10 @@ impl LLVM {
 
                     // Define the class type
                     self.prologue.push(format!(
-                        "%{} = type {{\n  %{}VTable*{}{}\n}}",
+                        "%{} = type {{\n  {:<35} {}{}\n}}",
                         class_def.name(),
-                        class_def.name(),
-                        if fields.is_empty() { "\n" } else { ",\n" },
+                        format!("%{}VTable*{}", class_def.name(), if fields.is_empty() { "" } else { "," }),
+                        format!("; {}::__VTable\n", class_def.name()),
                         fields
                             .iter()
                             .enumerate()
