@@ -24,10 +24,15 @@ pub enum Expression {
         callee: Box<Expression>,
         args: Vec<Expression>,
     },
-    Method {
+    MethodCall {
         object: Box<Expression>,
-        method: Box<Expression>,
-    }
+        method: String,
+        args: Vec<Expression>,
+    },
+    FieldAccess {
+        object: Box<Expression>,
+        field: String,
+    },
 }
 
 impl Display for Expression {
@@ -48,8 +53,12 @@ impl Display for Expression {
                 let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
                 format!("Call({}, [{}])", callee, args_str)
             }
-            Expression::Method { object, method } => {
-                format!("Method({}, {})", object, method)
+            Expression::MethodCall { object, method, args } => {
+                let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
+                format!("Method({}, {}, [{}])", object, method, args_str)
+            }
+            Expression::FieldAccess { object, field } => {
+                format!("FieldAccess({}, {})", object, field)
             }
         };
         write!(f, "{}", fmtstr)

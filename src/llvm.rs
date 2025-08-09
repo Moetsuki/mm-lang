@@ -134,6 +134,8 @@ pub struct Evaluation {
     pub prologue: IR,
     pub epilogue: IR,
     pub register: Register,
+    pub current_class_context: Option<Class>,
+    pub current_struct_context: Option<Struct>,
 }
 
 ///
@@ -294,6 +296,7 @@ pub struct LLVM {
     scope: Scope,
     class_definitions: HashMap<String, Class>,
     struct_definitions: HashMap<String, Struct>,
+    current_class_scope: Option<Box<Class>>,
 }
 
 impl LLVM {
@@ -310,6 +313,7 @@ impl LLVM {
             scope: Scope::new(),
             class_definitions: HashMap::new(),
             struct_definitions: HashMap::new(),
+            current_class_scope: None,
         }
     }
 
@@ -382,6 +386,8 @@ impl LLVM {
             prologue: IR::new(),
             epilogue: IR::new(),
             register: Register::new(Type::ToBeEvaluated),
+            current_class_context: None,
+            current_struct_context: None,
         };
 
         self.scope.enter_scope();
@@ -441,8 +447,48 @@ impl LLVM {
                         eval.register = coerced_register.clone();
                         self.scope.insert(eval.register.clone(), var_info.clone());
                     }
+                    Expression::FieldAccess { object, field } => {
+                        match &**object {
+                            Expression::Variable(var) => {
+                                match var.name.as_str() {
+                                    "self" | "this" => {
+                                        self.current_class_scope.as_mut().map(|class_scope| {
+                                            match &class_scope.statement {
+                                                Statement::Class { name, fields, .. } => {
+                                                    if let Some(field_info) = fields.iter().find(|f| f.0.name == *field) {
+                                                        // Found the field in the class scope
+                                                        let field_register = Register::new(field_info.0.clone().var_type);
+                                                        //
+                                                        // TODO: compile assignment to lhs (field_info.0) to rhs
+                                                        //
+                                                        eval.register = field_register;
+                                                    } else {
+                                                        panic!("Field '{}' not found in class '{}'", field, name);
+                                                    }
+                                                },
+                                                _ => {
+                                                    panic!("Unexpected class_scope statement, expected Class or None, found {:?}", class_scope.statement);
+                                                }
+                                            }
+                                        });
+                                    }
+                                    _ => {
+                                        //
+                                        // TODO: Handle other kinds of field acesss, like local objects
+                                        //
+                                    }
+                                }
+                            }
+                            _ => {
+                                panic!("Unsupported object type for field access: {:?}", object);
+                            }
+                        }
+                    }
                     _ => {
-                        panic!("Unsupported lhs expression in LLVM IR transformation");
+                        panic!(
+                            "Unsupported lhs expression in LLVM IR transformation!\n [Expression]: {:?}",
+                            lhs
+                        );
                     }
                 },
                 Statement::If {
@@ -672,7 +718,10 @@ impl LLVM {
                             ));
                         }
                         _ => {
-                            panic!("Unsupported callee expression in function call: {:?}", callee);
+                            panic!(
+                                "Unsupported callee expression in function call: {:?}",
+                                callee
+                            );
                         }
                     }
                 }
@@ -792,15 +841,20 @@ impl LLVM {
                     self.prologue.push(format!(
                         "%{} = type {{\n  {:<35} {}{}\n}}",
                         class_def.name(),
-                        format!("%{}VTable*{}", class_def.name(), if fields.is_empty() { "" } else { "," }),
+                        format!(
+                            "%{}VTable*{}",
+                            class_def.name(),
+                            if fields.is_empty() { "" } else { "," }
+                        ),
                         format!("; {}::__VTable\n", class_def.name()),
                         fields
                             .iter()
                             .enumerate()
                             .map(|(i, (f, _))| {
                                 let comma = if i + 1 < fields.len() { "," } else { "" };
-                                format!("  {:<35} ; {}::{}", 
-                                    format!("{}{}",self.type_to_llvm(&f.var_type), comma),
+                                format!(
+                                    "  {:<35} ; {}::{}",
+                                    format!("{}{}", self.type_to_llvm(&f.var_type), comma),
                                     class_def.name(),
                                     f.name.clone()
                                 )
@@ -862,33 +916,45 @@ impl LLVM {
                         // Move to the parent class
                         current_class = class.parent.as_deref();
                     }
-                    
+
                     // Build VTable entries ensuring commas separate types (before comments)
                     let mut method_sigs: Vec<(String, String, String)> = Vec::new();
                     for (method, class_name) in &all_methods {
-                        if let Statement::Function { name, ret_type, params, .. } = method.0.as_ref() {
+                        if let Statement::Function {
+                            name,
+                            ret_type,
+                            params,
+                            ..
+                        } = method.0.as_ref()
+                        {
                             let return_type = self.type_to_llvm(ret_type);
 
                             // First implicit param is always %ClassName*
-                            let mut param_types: Vec<String> = vec![format!("%{}*", class_def.name())];
+                            let mut param_types: Vec<String> =
+                                vec![format!("%{}*", class_def.name())];
                             for p in params {
                                 param_types.push(self.type_to_llvm(&p.var_type));
                             }
 
-                            let signature = format!("{} ({})*", return_type, param_types.join(", "));
+                            let signature =
+                                format!("{} ({})*", return_type, param_types.join(", "));
                             method_sigs.push((signature, class_name.to_string(), name.to_string()));
                         } else {
                             panic!("Expected function statement for class method");
                         }
                     }
 
-                    let vt_body =
-                        method_sigs
+                    let vt_body = method_sigs
                         .iter()
                         .enumerate()
                         .map(|(i, (sig, class_name, func_name))| {
                             let comma = if i + 1 < method_sigs.len() { "," } else { "" };
-                            format!("  {:<35} ; {}::{}", format!("{}{}", sig, comma), class_name, func_name)
+                            format!(
+                                "  {:<35} ; {}::{}",
+                                format!("{}{}", sig, comma),
+                                class_name,
+                                func_name
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -899,6 +965,98 @@ impl LLVM {
                         vt_body
                     ));
 
+                    // Define all member methods of this class in LLVM IR
+                    for (method, class_name) in all_methods {
+                        if let Statement::Function {
+                            name,
+                            ret_type,
+                            params,
+                            body,
+                        } = method.0.as_ref()
+                        {
+                            // Generate function signature
+                            let return_type_llvm = self.type_to_llvm(&ret_type);
+
+                            // Add `self` as the first parameter
+                            let mut param_str = format!("%{}* %self", class_def.name());
+                            if !params.is_empty() {
+                                let params_str = params
+                                    .iter()
+                                    .map(|p| {
+                                        format!("{} %{}", self.type_to_llvm(&p.var_type), p.name)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                param_str = format!("{}, {}", param_str, params_str);
+                            }
+
+                            //
+                            // Generate function body <START>
+                            //
+                            self.current_class_scope = Some(Box::new(class_def.clone()));
+
+                            // Enter method scope
+                            self.scope.enter_scope(); 
+
+                            // Push `self` to the function scope
+                            let self_register =
+                                Register::new(Type::Pointer(Box::new(Type::Class {
+                                    parent: None,
+                                    fields: vec![],  // You can populate this if needed
+                                    methods: vec![], // You can populate this if needed
+                                })));
+                            self.scope.insert(
+                                self_register.clone(),
+                                Variable {
+                                    name: "self".to_string(),
+                                    var_type: self_register.var_type.clone(),
+                                },
+                            );
+
+                            // Add other parameters to the scope
+                            for param in params {
+                                let param_register = Register::new(param.var_type.clone());
+                                self.scope.insert(param_register.clone(), param.clone());
+                            }
+
+                            let body_llvm = self.transform_block(&body.statements);
+
+                            // Exit method scope
+                            self.scope.exit_scope();
+
+                            self.current_class_scope = None;
+                            //
+                            // Generate function body </END>
+                            //
+
+                            // Insert the function definition into the LLVM IR
+                            self.prologue.push(format!(
+                                "{}define {} @{}({}) {{\nentry:",
+                                format!("; {}::{}\n", class_name, name),
+                                return_type_llvm,
+                                name,
+                                param_str,
+                            ));
+                            self.prologue
+                                .instructions
+                                .extend(body_llvm.clone().unwrap().prologue.instructions);
+                            self.prologue
+                                .instructions
+                                .extend(body_llvm.clone().unwrap().epilogue.instructions);
+
+                            if (name == &format!("__{}_init", class_name)
+                                || name == &format!("__{}_destroy", class_name))
+                                && body_llvm.clone().unwrap().prologue.instructions.is_empty()
+                                && body_llvm.clone().unwrap().epilogue.instructions.is_empty()
+                            {
+                                self.prologue.push(format!("  ret void"));
+                            }
+
+                            self.prologue.push(format!("}}"));
+                        } else {
+                            panic!("Expected function statement for class method");
+                        }
+                    }
 
                     // Insert the class definition into the class definitions
                     self.class_definitions
@@ -924,6 +1082,8 @@ impl LLVM {
             prologue: IR::new(),
             epilogue: IR::new(),
             register: Register::new(Type::ToBeEvaluated),
+            current_class_context: None,
+            current_struct_context: None,
         };
 
         match expr {
@@ -1265,6 +1425,111 @@ impl LLVM {
                 // For now, we will panic if we encounter this case
                 panic!("Method calls are not yet implemented in LLVM IR transformation");
             }
+            Expression::FieldAccess { object, field } => {
+                // Evaluate the base object (e.g., `self` or `this`)
+                let object_eval = match &*object {
+                    Expression::Variable(var) if var.name == "self" => {
+                        // Ensure we are in a class scope
+                        let class_scope = self
+                            .current_class_scope
+                            .as_ref()
+                            .expect("Field access requires a class scope");
+
+                        // `self` or `this` points to the current class
+                        let class_type = Type::Pointer(Box::new(match &class_scope.statement {
+                            Statement::Class { .. } => self.get_class_type(&class_scope.name),
+                            _ => panic!("Expected class statement for 'self'"),
+                        }));
+
+                        let self_register = Register::new(class_type);
+                        Evaluation {
+                            prologue: IR::new(),
+                            epilogue: IR::new(),
+                            register: self_register,
+                            current_class_context: Some(*class_scope.clone()),
+                            current_struct_context: None,
+                        }
+                    }
+                    _ => self.transform_expression(*object),
+                };
+
+                eval.prologue
+                    .instructions
+                    .extend(object_eval.prologue.instructions);
+                eval.epilogue
+                    .instructions
+                    .extend(object_eval.epilogue.instructions);
+
+                // Ensure the object is a pointer to a class
+                let _class_type = match &object_eval.register.var_type {
+                    Type::Pointer(inner_type) => match **inner_type {
+                        Type::Class { ref fields, .. } => fields.clone(),
+                        _ => panic!("Field access on non-class pointer"),
+                    },
+                    _ => panic!("Field access on non-pointer type"),
+                };
+
+                // Ensure the field exists in the class
+                let field =
+                    object_eval
+                        .current_class_context
+                        .as_ref()
+                        .and_then(|c| match &c.statement {
+                            Statement::Class { fields, .. } => fields
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (f, _))| f.name == field)
+                                .map(|(i, (f, _))| (i, f.clone())),
+                            _ => None,
+                        });
+
+                let (field_index, field_var) = match field {
+                    Some((index, f)) => (index, f),
+                    None => panic!("Field '{:?}' not found in class", field),
+                };
+
+                // Generate GEP instruction to get the field pointer
+                let field_ptr_register =
+                    Register::new(Type::Pointer(Box::new(field_var.var_type.clone())));
+                eval.epilogue.push(format!(
+                    "%{} = getelementptr %{}, %{}* %{}, i32 0, i32 {}",
+                    field_ptr_register.to_string(),
+                    self.type_to_llvm(&object_eval.register.var_type),
+                    self.type_to_llvm(&object_eval.register.var_type),
+                    object_eval.register.to_string(),
+                    field_index
+                ));
+
+                // If the field is a pointer to another class, update the register for further access
+                let field_type = field_var.var_type.clone();
+                if let Type::Pointer(inner_type) = &field_type {
+                    if let Type::Class { .. } = **inner_type {
+                        eval.register = field_ptr_register;
+                    } else {
+                        // Load the value if it's not a class pointer
+                        let field_value_register = Register::new(field_type.clone());
+                        eval.epilogue.push(format!(
+                            "%{} = load {}, {}* %{}",
+                            field_value_register.to_string(),
+                            self.type_to_llvm(&field_type),
+                            self.type_to_llvm(&field_type),
+                            field_ptr_register.to_string()
+                        ));
+                        eval.register = field_value_register;
+                    }
+                } else {
+                    // Load the value if it's not a pointer
+                    let field_value_register = Register::new(field_type.clone());
+                    eval.epilogue.push(format!(
+                        "%{} = load {}, {}* %{}",
+                        field_value_register.to_string(),
+                        self.type_to_llvm(&field_type),
+                        self.type_to_llvm(&field_type),
+                        field_ptr_register.to_string()
+                    ));
+                    eval.register = field_value_register;
+                }
+            }
             _ => {
                 panic!(
                     "Unsupported expression type in LLVM IR transformation!\n[Expression]:\n {}",
@@ -1516,5 +1781,66 @@ impl LLVM {
                 },
             },
         );
+    }
+
+    fn get_class_type(&self, class_name: &str) -> Type {
+        // Find class in the class definitions
+        let class_def = self.current_class_scope.as_ref().map_or_else(
+            || {
+                self.class_definitions.get(class_name).expect(&format!(
+                    "Class '{}' not found in class definitions",
+                    class_name
+                ))
+            },
+            |class_def| class_def.as_ref(),
+        );
+
+        // From the class statement extract parent, fields and methods
+        match &class_def.statement {
+            Statement::Class {
+                parent,
+                fields,
+                methods,
+                ..
+            } => {
+                // If the parent isn't null, get its type recursively
+                let parent_type = parent.as_ref().map(|p| Box::new(self.get_class_type(p)));
+
+                // Extract field types and names
+                let field_types = fields
+                    .iter()
+                    .map(|(var, visibility)| (Box::new(var.var_type.clone()), *visibility))
+                    .collect();
+
+                // Extract method types and visibilities
+                let method_types = methods
+                    .iter()
+                    .map(|(method, visibility)| {
+                        if let Statement::Function {
+                            ret_type, params, ..
+                        } = method.as_ref()
+                        {
+                            let method_type = Type::Function {
+                                args: params.iter().map(|p| p.var_type.clone()).collect(),
+                                ret_type: Box::new(ret_type.clone()),
+                                is_variadic: false,
+                            };
+                            (Box::new(method_type), *visibility)
+                        } else {
+                            panic!("Expected method to be a function in class '{}'", class_name);
+                        }
+                    })
+                    .collect();
+
+                Type::Class {
+                    parent: parent_type,
+                    fields: field_types,
+                    methods: method_types,
+                }
+            }
+            _ => {
+                panic!("Expected class statement for class type");
+            }
+        }
     }
 }

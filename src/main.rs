@@ -296,36 +296,37 @@ fn test_class() {
         public name: string;
         protected id: u64;
 
-        public function name() -> string {
-            return self.name;
+        init (new_id: u64) {
+            self.id = new_id;
         }
     };
 
     class Animal : Entity {
-        private name: string;
         private age: i32;
         protected species: string;
 
-        public function speak() -> string {
-            return "Animal sound";
+        init (new_age: i32, new_species: string) {
+            self.age = new_age;
+            self.species = new_species;
         }
     };
 
     class Dog : Animal {
-        public breed: string;
+        public breed: i16;
 
-        public function speak() -> string {
-            return "Woof!";
+        init (new_breed: i16) {
+            self.breed = new_breed;
         }
     };
 
     class Cat : Animal {
-        public color: string;
+        public color: i8;
 
-        public function speak() -> string {
-            return "Meow!";
+        init (new_color: i8) {
+            self.color = new_color;
         }
     };
+    
     "#;
     process(source, None);
 }
@@ -348,6 +349,30 @@ fn test_method_call() {
     ent: Entity = Entity();
     ent.name = "Test Entity";
     result: string = ent.name();
+    "#;
+    process(source, None);
+}
+
+#[test]
+fn test_simple_class() {
+    let source = r#"
+    class Point {
+        public x: i32;
+        public y: i32;
+
+        init(x: i32, y: i32) {
+            self.x = x;
+            self.y = y;
+        }
+
+        public function get_x() -> i32 {
+            return self.x;
+        }
+
+        public function get_y() -> i32 {
+            return self.y;
+        }
+    };
     "#;
     process(source, None);
 }
