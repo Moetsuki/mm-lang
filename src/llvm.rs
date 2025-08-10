@@ -844,6 +844,33 @@ impl LLVM {
                     // Create a new class definition
                     let class_def = Class::new(name.clone(), parent_class, statement.clone());
 
+                    // Collect methods and fields from parent classes up the chain, starting from base class moving up
+                    let mut all_methods = Vec::new();
+                    let mut all_fields = Vec::new();
+                    let mut current_class: Option<&Class> = Some(&class_def);
+                    while let Some(class) = current_class {
+                        // Add methods and fields from the current class
+                        if let Statement::Class { name, methods, fields, .. } = &class.statement {
+                            let mut tmp_methods = Vec::new();
+                            let mut tmp_fields = Vec::new();
+                            for method in methods.iter() {
+                                if let Statement::Function { .. } = &method.0.as_ref() {
+                                    tmp_methods.push((method.clone(), name));
+                                }
+                            }
+                            for field in fields.iter() {
+                                tmp_fields.push((field.clone(), name));
+                            }
+                            // Prepend the class methods and fields to the lists
+                            // This ensures that methods from parent classes appear first (on top of the VTable)
+                            // And parent fields show first
+                            all_methods.splice(0..0, tmp_methods);
+                            all_fields.splice(0..0, tmp_fields);
+                        }
+                        // Move to the parent class
+                        current_class = class.parent.as_deref();
+                    }
+
                     // Define the class type
                     self.prologue.push(format!(
                         "%{} = type {{\n  {:<35} {}{}\n}}",
@@ -853,16 +880,16 @@ impl LLVM {
                             if fields.is_empty() { "" } else { "," }
                         ),
                         format!("; {}::__VTable\n", class_def.name()),
-                        fields
+                        all_fields
                             .iter()
                             .enumerate()
-                            .map(|(i, (f, _))| {
-                                let comma = if i + 1 < fields.len() { "," } else { "" };
+                            .map(|(i, (f, class_name))| {
+                                let comma = if i + 1 < all_fields.len() { "," } else { "" };
                                 format!(
                                     "  {:<35} ; {}::{}",
-                                    format!("{}{}", self.type_to_llvm(&f.var_type), comma),
-                                    class_def.name(),
-                                    f.name.clone()
+                                    format!("{}{}", self.type_to_llvm(&f.0.var_type), comma),
+                                    class_name,
+                                    f.0.name.clone()
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -900,28 +927,6 @@ impl LLVM {
                                 class_def.name()
                             )
                         });
-
-                    // Generate the class VTable
-                    // Collect methods from parent classes up the chain, starting from base class moving up
-                    let mut all_methods = Vec::new();
-                    let mut current_class: Option<&Class> = Some(&class_def);
-                    while let Some(class) = current_class {
-                        // Add methods from the current class
-                        if let Statement::Class { name, methods, .. } = &class.statement {
-                            // Collect methods from this class
-                            let mut tmp_methods = Vec::new();
-                            for method in methods.iter() {
-                                if let Statement::Function { .. } = &method.0.as_ref() {
-                                    tmp_methods.push((method.clone(), name));
-                                }
-                            }
-                            // Prepend the class methods to the all_methods list
-                            // This ensures that methods from parent classes appear first (on top of the VTable)
-                            all_methods.splice(0..0, tmp_methods);
-                        }
-                        // Move to the parent class
-                        current_class = class.parent.as_deref();
-                    }
 
                     // Build VTable entries ensuring commas separate types (before comments)
                     let mut method_sigs: Vec<(String, String, String)> = Vec::new();
@@ -1029,6 +1034,7 @@ impl LLVM {
                                 self.scope.insert(param_register.clone(), param.clone());
                             }
 
+                            println!("Processing method: {}::{}", class_name, name);
                             let body_llvm = self.transform_block(&body.statements);
 
                             // Exit method scope
