@@ -376,3 +376,31 @@ fn test_simple_class() {
     "#;
     process(source, None);
 }
+
+#[test]
+fn test_simple_inheritance() {
+    let source = r#"
+    class Animal {
+        public name: string;
+        public id: u64;
+
+        init(name: string, id: u64) {
+            self.name = name;
+            self.id = id;
+        }
+
+        public function speak() -> string {
+            return "Animal sound";
+        }
+    };
+
+    class Dog : Animal {
+        public breed: string;
+
+        public function bark() -> string {
+            return "Woof!";
+        }
+    };
+    "#;
+    process(source, None);
+}
