@@ -340,7 +340,7 @@ impl LLVM {
             Type::String => "ptr".to_string(),
             Type::NoneType => "void".to_string(),
             Type::Pointer(_) => "ptr".to_string(),
-            _ => "i32".to_string(), // Default fallback
+            _ => panic!("Unsupported type {} for LLVM IR", t),
         }
     }
 
@@ -414,7 +414,9 @@ impl LLVM {
                         .extend(value_eval.epilogue.instructions);
 
                     // Handle type coercion if needed
-                    let final_register = if value_eval.register.var_type != var_info.var_type {
+                    let final_register = if value_eval.register.var_type != var_info.var_type
+                        && var_info.var_type != Type::ToBeEvaluated
+                    {
                         self.insert_type_conversion(
                             &mut eval.epilogue,
                             &value_eval.register,
@@ -1140,9 +1142,10 @@ impl LLVM {
 
                             // Insert the function definition into the LLVM IR
                             self.prologue.push(format!(
-                                "{}define {} @{}({}) {{\nentry:",
+                                "{}define {} @__{}_{}({}) {{\nentry:",
                                 format!("; {}::{}\n", class_def.name, name),
                                 return_type_llvm,
+                                class_def.name,
                                 name,
                                 param_str,
                             ));
@@ -1164,6 +1167,45 @@ impl LLVM {
                             panic!("Expected function statement for class method");
                         }
                     }
+
+                    // Generate the read-only VTable for the class
+                    let vtable_name = format!("k_{}VTable", class_def.name());
+                    self.prologue.push(format!(
+                        "@{} = constant %{}VTable {{",
+                        vtable_name,
+                        class_def.name()
+                    ));
+                    let mut method_sigs = Vec::new();
+                    for (method, class_name) in &all_methods {
+                        let (fun, cl, nm) = if let Statement::Function { name, .. } = method.0.as_ref() {
+                            (format!(
+                                "  ptr @__{}_{}",
+                                class_name,
+                                name,
+                            ), class_name, name)
+                        } else {
+                            panic!("Expected function statement for class method");
+                        };
+                        method_sigs.push((fun, cl.to_string(), nm.to_string()));
+                    }
+                    self.prologue.push(
+                        method_sigs
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (sig, class_name, func_name))| {
+                                let comma = if i + 1 < method_sigs.len() { "," } else { "" };
+                                format!(
+                                    "  {}{} ; {}::{}",
+                                    sig,
+                                    comma,
+                                    class_name,
+                                    func_name
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    self.prologue.push(format!("}}"));
                 }
                 _ => {
                     panic!(
@@ -1664,7 +1706,7 @@ impl LLVM {
 
                         // If the function is not found and the class name is the same
                         // as the variable name, treat it as a method call to the constructor
-                        let func_name = if func.is_none() && class.is_some() {
+                        let (func_name, is_constructor) = if func.is_none() && class.is_some() {
                             let class_name = class.as_ref().unwrap().name.clone();
                             let class_def = class.unwrap();
                             match class_def.statement {
@@ -1675,11 +1717,32 @@ impl LLVM {
                                 }
                                 _ => panic!("Expected class statement for constructor"),
                             }
-                            format!("__{}_init", class_name)
+                            (format!("__{}_init", class_name), true)
                         } else {
                             eval.register.var_type = func.as_ref().unwrap().var_type.clone();
-                            var.name.clone()
+                            (var.name.clone(), false)
                         };
+
+                        if class.is_some() && is_constructor {
+                            // Make a new register for self and allocate the type in the stack
+                            let self_reg = Register::new(eval.register.var_type.clone());
+                            eval.epilogue.push(format!(
+                                "%{} = alloca {}, align 8",
+                                self_reg.to_string(),
+                                class.as_ref().unwrap().name
+                            ));
+                            // Get the vtable pointer from the first element
+                            eval.epilogue.push(format!(
+                                "%vtable_ptr = getelementptr inbounds {}, ptr %{}, i32 0, i32 0",
+                                class.as_ref().unwrap().name,
+                                self_reg.to_string()
+                            ));
+                            // Store the pointer to constant vtable in readonly data in %vtable_ptr
+                            eval.epilogue.push(format!(
+                                "store ptr @{}VTable, ptr %vtable_ptr, align 8",
+                                class.as_ref().unwrap().name
+                            ));
+                        }
 
                         // Prepare arguments
                         let mut arg_registers = Vec::new();
