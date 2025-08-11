@@ -954,7 +954,7 @@ impl LLVM {
 
                     // Define the class type
                     self.prologue.push(format!(
-                        "%{} = type {{\n  {:<35} {}{}\n}}",
+                        "%{} = type {{\n  {:<55} {}{}\n}}",
                         class_def.name(),
                         format!("ptr{}", if fields.is_empty() { "" } else { "," }),
                         format!("; {}::__VTable\n", class_def.name()),
@@ -964,7 +964,7 @@ impl LLVM {
                             .map(|(i, (f, class_name))| {
                                 let comma = if i + 1 < all_fields.len() { "," } else { "" };
                                 format!(
-                                    "  {:<35} ; {}::{}",
+                                    "  {:<55} ; {}::{}",
                                     format!("{}{}", self.type_to_llvm(&f.0.var_type), comma),
                                     class_name,
                                     f.0.name.clone()
@@ -1037,7 +1037,7 @@ impl LLVM {
                         .map(|(i, (sig, class_name, func_name))| {
                             let comma = if i + 1 < method_sigs.len() { "," } else { " " };
                             format!(
-                                "  {} ; {:<35} {}::{}",
+                                "  {} ; {:<48} ; {}::{}",
                                 format!("ptr{}", comma),
                                 sig,
                                 class_name,
@@ -1195,9 +1195,8 @@ impl LLVM {
                             .map(|(i, (sig, class_name, func_name))| {
                                 let comma = if i + 1 < method_sigs.len() { "," } else { "" };
                                 format!(
-                                    "  {}{} ; {}::{}",
-                                    sig,
-                                    comma,
+                                    "  {:<55} ; {}::{}",
+                                    format!("{}{}", sig, comma),
                                     class_name,
                                     func_name
                                 )
