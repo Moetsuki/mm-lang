@@ -1,5 +1,6 @@
 use core::panic;
 
+use crate::statement::Visibility;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
@@ -191,6 +192,8 @@ pub struct Class {
     pub name: String,
     pub parent: Option<Box<Class>>,
     pub statement: Statement,
+    pub all_fields: Vec<((Variable, Visibility), String)>,
+    pub all_methods: Vec<((Box<Statement>, Visibility), String)>,
 }
 
 static CLASS_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -203,6 +206,8 @@ impl Class {
             name,
             parent,
             statement: class_stm,
+            all_fields: Vec::new(),
+            all_methods: Vec::new(),
         }
     }
 
@@ -221,6 +226,7 @@ pub struct Struct {
     pub name: String,
     pub parent: Option<Box<Struct>>,
     pub statement: Statement,
+    pub all_fields: Vec<(Variable, String)>,
 }
 
 impl Struct {
@@ -231,6 +237,7 @@ impl Struct {
             name,
             parent,
             statement: struct_stm,
+            all_fields: Vec::new(),
         }
     }
 
@@ -447,41 +454,99 @@ impl LLVM {
                         eval.register = coerced_register.clone();
                         self.scope.insert(eval.register.clone(), var_info.clone());
                     }
-                    Expression::FieldAccess { object, field } => {
-                        match &**object {
-                            Expression::Variable(var) => {
-                                match var.name.as_str() {
-                                    "self" | "this" => {
-                                        self.current_class_scope.as_mut().map(|class_scope| {
-                                            match &class_scope.statement {
-                                                Statement::Class { name, fields, .. } => {
-                                                    if let Some(field_info) = fields.iter().find(|f| f.0.name == *field) {
-                                                        // Found the field in the class scope
-                                                        let field_register = Register::new(field_info.0.clone().var_type);
-                                                        //
-                                                        // TODO: compile assignment to lhs (field_info.0) to rhs
-                                                        //
-                                                        eval.register = field_register;
-                                                    } else {
-                                                        panic!("Field '{}' not found in class '{}'", field, name);
-                                                    }
-                                                },
-                                                _ => {
-                                                    panic!("Unexpected class_scope statement, expected Class or None, found {:?}", class_scope.statement);
-                                                }
-                                            }
-                                        });
-                                    }
-                                    _ => {
-                                        //
-                                        // TODO: Handle other kinds of field acesss, like local objects
-                                        //
-                                    }
+                    Expression::FieldAccess { object: lhs, field } => {
+                        let object_eval = self.transform_expression(*lhs.clone());
+
+                        // Ensure the object is a pointer type
+                        if let Type::Pointer(inner_type) = object_eval.register.clone().var_type {
+                            eval.prologue
+                                .instructions
+                                .extend(object_eval.prologue.instructions);
+                            eval.epilogue
+                                .instructions
+                                .extend(object_eval.epilogue.instructions);
+
+                            // Get the class or struct name from the inner type
+                            let object_name = if let Type::Class { name, .. } = *inner_type {
+                                name
+                            } else if let Type::Struct { name, .. } = *inner_type {
+                                name
+                            } else {
+                                panic!("Object must be a class or struct type for field access");
+                            };
+
+                            // Find the field in the class or struct definition
+                            let (field_index, field_var) =
+                                if let Some(class) = self.class_definitions.get(&object_name) {
+                                    class
+                                        .all_fields
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, (f, _))| f.0.name == *field)
+                                        .map(|(i, (f, _))| (i, f.0.clone()))
+                                } else if let Some(struct_def) =
+                                    self.struct_definitions.get(&object_name)
+                                {
+                                    struct_def
+                                        .all_fields
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, (f, _))| f.name == *field)
+                                        .map(|(i, (f, _))| (i, f.clone()))
+                                } else {
+                                    panic!(
+                                        "Field '{}' not found in object type '{}'",
+                                        field, object_name
+                                    );
                                 }
-                            }
-                            _ => {
-                                panic!("Unsupported object type for field access: {:?}", object);
-                            }
+                                .expect(&format!(
+                                    "Field '{}' not found in object type '{}'",
+                                    field, object_name
+                                ));
+
+                            // Create a new register for the field
+                            let field_register = Register::new(field_var.var_type.clone());
+
+                            // Calculate rhs of the assignment
+                            let rhs_eval = self.transform_expression(rhs.clone());
+                            eval.prologue
+                                .instructions
+                                .extend(rhs_eval.prologue.instructions);
+                            eval.epilogue
+                                .instructions
+                                .extend(rhs_eval.epilogue.instructions);
+
+                            // Handle type coercion if needed
+                            let coerced_register =
+                                if rhs_eval.register.var_type != field_var.var_type {
+                                    self.insert_type_conversion(
+                                        &mut eval.epilogue,
+                                        &rhs_eval.register,
+                                        &field_var.var_type,
+                                    )
+                                } else {
+                                    rhs_eval.register
+                                };
+
+                            // Generate LLVM IR for the assignment
+                            eval.epilogue.push(format!(
+                                "%{} = getelementptr inbounds %{}, ptr %{}, i64 0, i32 {}",
+                                field_register.to_string(),
+                                object_name,
+                                object_eval.register.to_string(),
+                                field_index + 1 // +1 because the first element is the vtable pointer
+                            ));
+
+                            eval.epilogue.push(format!(
+                                "store {} %{}, ptr %{}",
+                                self.type_to_llvm(&coerced_register.var_type),
+                                coerced_register.to_string(),
+                                field_register.to_string()
+                            ));
+
+                            eval.register = coerced_register;
+                        } else {
+                            panic!("Object must be a pointer type for field access");
                         }
                     }
                     _ => {
@@ -599,12 +664,15 @@ impl LLVM {
                         ));
                     }
 
+                    // If return type is not NoneType
                     // Make sure the first level of statements have a return statement
-                    if !body.statements.iter().any(|s| match s {
-                        Statement::Return { .. } => true,
-                        _ => false,
-                    }) {
-                        panic!("Function '{}' must have a return statement", name);
+                    if ret_type != &Type::NoneType {
+                        if !body.statements.iter().any(|s| match s {
+                            Statement::Return { .. } => true,
+                            _ => false,
+                        }) {
+                            panic!("Function '{}' must have a return statement", name);
+                        }
                     }
 
                     // Transform function body
@@ -842,7 +910,7 @@ impl LLVM {
                     };
 
                     // Create a new class definition
-                    let class_def = Class::new(name.clone(), parent_class, statement.clone());
+                    let mut class_def = Class::new(name.clone(), parent_class, statement.clone());
 
                     // Collect methods and fields from parent classes up the chain, starting from base class moving up
                     let mut all_methods = Vec::new();
@@ -850,16 +918,22 @@ impl LLVM {
                     let mut current_class: Option<&Class> = Some(&class_def);
                     while let Some(class) = current_class {
                         // Add methods and fields from the current class
-                        if let Statement::Class { name, methods, fields, .. } = &class.statement {
+                        if let Statement::Class {
+                            name,
+                            methods,
+                            fields,
+                            ..
+                        } = &class.statement
+                        {
                             let mut tmp_methods = Vec::new();
                             let mut tmp_fields = Vec::new();
                             for method in methods.iter() {
                                 if let Statement::Function { .. } = &method.0.as_ref() {
-                                    tmp_methods.push((method.clone(), name));
+                                    tmp_methods.push((method.clone(), name.clone()));
                                 }
                             }
                             for field in fields.iter() {
-                                tmp_fields.push((field.clone(), name));
+                                tmp_fields.push((field.clone(), name.clone()));
                             }
                             // Prepend the class methods and fields to the lists
                             // This ensures that methods from parent classes appear first (on top of the VTable)
@@ -871,14 +945,16 @@ impl LLVM {
                         current_class = class.parent.as_deref();
                     }
 
+                    class_def.all_methods = all_methods.clone();
+                    class_def.all_fields = all_fields.clone();
+
+                    //
+
                     // Define the class type
                     self.prologue.push(format!(
                         "%{} = type {{\n  {:<35} {}{}\n}}",
                         class_def.name(),
-                        format!(
-                            "ptr{}",
-                            if fields.is_empty() { "" } else { "," }
-                        ),
+                        format!("ptr{}", if fields.is_empty() { "" } else { "," }),
                         format!("; {}::__VTable\n", class_def.name()),
                         all_fields
                             .iter()
@@ -941,14 +1017,12 @@ impl LLVM {
                             let return_type = self.type_to_llvm(ret_type);
 
                             // First implicit param is always %ClassName*
-                            let mut param_types: Vec<String> =
-                                vec!["ptr".to_string()];
+                            let mut param_types: Vec<String> = vec!["ptr".to_string()];
                             for p in params {
                                 param_types.push(self.type_to_llvm(&p.var_type));
                             }
 
-                            let signature =
-                                format!("{}({})", return_type, param_types.join(", "));
+                            let signature = format!("{}({})", return_type, param_types.join(", "));
                             method_sigs.push((signature, class_name.to_string(), name.to_string()));
                         } else {
                             panic!("Expected function statement for class method");
@@ -977,8 +1051,12 @@ impl LLVM {
                         vt_body
                     ));
 
+                    // Insert the class definition into the class definitions
+                    self.class_definitions
+                        .insert(name.clone(), class_def.clone());
+
                     // Define all member methods of this class in LLVM IR
-                    for (method, class_name) in all_methods {
+                    for method in methods {
                         if let Statement::Function {
                             name,
                             ret_type,
@@ -998,26 +1076,13 @@ impl LLVM {
                                     methods: vec![], // You can populate this if needed
                                 })));
 
-                            // Add `self` as the first parameter
-                            let mut param_str = format!("ptr %{}", self_register.to_string());
-                            if !params.is_empty() {
-                                let params_str = params
-                                    .iter()
-                                    .map(|p| {
-                                        format!("{} %{}", self.type_to_llvm(&p.var_type), p.name)
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                param_str = format!("{}, {}", param_str, params_str);
-                            }
-
                             //
                             // Generate function body <START>
                             //
                             self.current_class_scope = Some(Box::new(class_def.clone()));
 
                             // Enter method scope
-                            self.scope.enter_scope(); 
+                            self.scope.enter_scope();
 
                             // Push `self` to the function scope
                             self.scope.insert(
@@ -1029,12 +1094,40 @@ impl LLVM {
                             );
 
                             // Add other parameters to the scope
+                            let mut param_reg_pair = Vec::new();
                             for param in params {
                                 let param_register = Register::new(param.var_type.clone());
                                 self.scope.insert(param_register.clone(), param.clone());
+                                param_reg_pair.push((param_register, param));
                             }
 
-                            println!("Processing method: {}::{}", class_name, name);
+                            // Add `self` as the first parameter
+                            let mut param_str = format!("ptr %{}", self_register.to_string());
+                            if !params.is_empty() {
+                                let params_str = params
+                                    .iter()
+                                    .map(|p| {
+                                        // find reg from param_reg_pair using p.name as key
+                                        let param_reg = &param_reg_pair
+                                            .iter()
+                                            .find(|(_, param)| param.name == p.name)
+                                            .expect(&format!(
+                                                "Parameter '{}' not found in method parameters",
+                                                p.name
+                                            ))
+                                            .0;
+                                        format!(
+                                            "{} %{}",
+                                            self.type_to_llvm(&p.var_type),
+                                            param_reg.to_string()
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                param_str = format!("{}, {}", param_str, params_str);
+                            }
+
+                            // println!("Processing method: {}::{}", class_def.name, name);
                             let body_llvm = self.transform_block(&body.statements);
 
                             // Exit method scope
@@ -1048,7 +1141,7 @@ impl LLVM {
                             // Insert the function definition into the LLVM IR
                             self.prologue.push(format!(
                                 "{}define {} @{}({}) {{\nentry:",
-                                format!("; {}::{}\n", class_name, name),
+                                format!("; {}::{}\n", class_def.name, name),
                                 return_type_llvm,
                                 name,
                                 param_str,
@@ -1060,10 +1153,8 @@ impl LLVM {
                                 .instructions
                                 .extend(body_llvm.clone().unwrap().epilogue.instructions);
 
-                            if (name == &format!("__{}_init", class_name)
-                                || name == &format!("__{}_destroy", class_name))
-                                && body_llvm.clone().unwrap().prologue.instructions.is_empty()
-                                && body_llvm.clone().unwrap().epilogue.instructions.is_empty()
+                            if name == &format!("__{}_init", class_def.name)
+                                || name == &format!("__{}_destroy", class_def.name)
                             {
                                 self.prologue.push(format!("  ret void"));
                             }
@@ -1073,10 +1164,6 @@ impl LLVM {
                             panic!("Expected function statement for class method");
                         }
                     }
-
-                    // Insert the class definition into the class definitions
-                    self.class_definitions
-                        .insert(name.clone(), class_def.clone());
                 }
                 _ => {
                     panic!(
@@ -1496,8 +1583,10 @@ impl LLVM {
 
                 while let Some(class_def) = class_cursor.clone() {
                     if let Statement::Class { fields, .. } = &class_def.statement {
-                        if let Some((i, (var, _vis))) =
-                            fields.iter().enumerate().find(|(_, (f, _))| f.name == field)
+                        if let Some((i, (var, _vis))) = fields
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (f, _))| f.name == field)
                         {
                             found = Some((i, var.clone(), class_def.clone()));
                             break;
@@ -1515,14 +1604,13 @@ impl LLVM {
                 let _owning_class = field_class.clone();
 
                 // Generate GEP instruction to get the field pointer
-                let field_ptr_register =
-                    Register::new(field_var.var_type.clone());
+                let field_ptr_register = Register::new(field_var.var_type.clone());
                 eval.epilogue.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
                     field_ptr_register.to_string(),
                     field_class.name,
                     object_eval.register.to_string(),
-                    field_index
+                    field_index + 1 // +1 because first element is the vtable pointer
                 ));
 
                 // If the field is a pointer to another class, update the register for further access
@@ -1559,23 +1647,15 @@ impl LLVM {
                 match *callee {
                     Expression::Variable(var) => {
                         // Find the function in the current scope
-                       let func = self
-                            .scope
-                            .find(&var);
+                        let func = self.scope.find(&var);
 
                         // Find the class in the current scope
-                        let class = self
-                            .class_definitions
-                            .get(&var.name)
-                            .or_else(
-                                || self.current_class_scope.as_ref().and_then(|c| {
-                                    if c.name == var.name {
-                                        Some(c)
-                                    } else {
-                                        None
-                                    }
-                                }).map(|v| &**v)
-                            );
+                        let class = self.class_definitions.get(&var.name).or_else(|| {
+                            self.current_class_scope
+                                .as_ref()
+                                .and_then(|c| if c.name == var.name { Some(c) } else { None })
+                                .map(|v| &**v)
+                        });
 
                         // println!("[LLVM Call] Function: {:?}, Class: {:?}", func, class);
                         // println!("[LLVM Call] Variable: {:?}", var);
@@ -1600,7 +1680,7 @@ impl LLVM {
                             eval.register.var_type = func.as_ref().unwrap().var_type.clone();
                             var.name.clone()
                         };
-                        
+
                         // Prepare arguments
                         let mut arg_registers = Vec::new();
                         for arg in args {
@@ -1923,7 +2003,10 @@ impl LLVM {
                     .iter()
                     .map(|(method, visibility)| {
                         if let Statement::Function {
-                            name, ret_type, params, ..
+                            name,
+                            ret_type,
+                            params,
+                            ..
                         } = method.as_ref()
                         {
                             let method_type = Type::Function {
