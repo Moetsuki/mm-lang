@@ -50,13 +50,14 @@ fn get_caller_name() -> Option<String> {
     None
 }
 
-fn process(source: &str, expected: Option<String>) {
+fn process(source: &str, expected: Option<String>, print_asm: bool) {
     let mut tokens = tokenize(source);
 
     let caller = get_caller_name().unwrap_or_else(|| "unknown".to_string());
     println!("Processing source code from: {}", caller);
 
     let outfile = "build/output_".to_string() + &caller;
+    let asmfile = "build/asm_".to_string() + &caller;
     let outfile_invoke = "./".to_string() + &outfile;
 
     // for token in &tokens {
@@ -78,57 +79,94 @@ fn process(source: &str, expected: Option<String>) {
         println!("{:>3}: {}", i, line);
     }
 
-    // Compile LLVM IR via stdin
-    let mut clang = Command::new("clang")
-        .args(&["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to start clang");
+    if print_asm {
+        // Compile LLVM IR via stdin
+        let mut clang = Command::new("clang")
+            .args(&["-x", "ir", "-", "-S", "-g", "-O0", "-o", &asmfile])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start clang");
 
-    // Write IR to clang's stdin
-    if let Some(stdin) = clang.stdin.as_mut() {
-        stdin
-            .write_all(ir_output.as_bytes())
-            .expect("Failed to write to clang stdin");
+        // Write IR to clang's stdin
+        if let Some(stdin) = clang.stdin.as_mut() {
+            stdin
+                .write_all(ir_output.as_bytes())
+                .expect("Failed to write to clang stdin");
+        }
+
+        // Wait for compilation to complete
+        let output = clang
+            .wait_with_output()
+            .expect("Failed to read clang output");
+
+        if output.status.success() {
+            // Now read and echo the assembly
+            let assembly_code = std::fs::read_to_string(&asmfile)
+                .expect("Failed to read generated assembly file");
+
+            println!("Generated Assembly:\n{}", assembly_code);
+        } else {
+            println!("ASM generation failed:");
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+        }
+
     }
 
-    // Wait for compilation to complete
-    let output = clang
-        .wait_with_output()
-        .expect("Failed to read clang output");
+    {
+        // Compile LLVM IR via stdin
+        let mut clang = Command::new("clang")
+            .args(&["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start clang");
 
-    if output.status.success() {
-        println!("Compilation successful!");
-
-        // Run the executable
-        let run_output = Command::new(&outfile_invoke)
-            .output()
-            .expect("Failed to run executable");
-
-        let std_out = String::from_utf8_lossy(&run_output.stdout);
-
-        let exit_code = run_output.status.code().unwrap_or(-1);
-
-        let std_err = String::from_utf8_lossy(&run_output.stderr);
-
-        println!("Program output:");
-        println!("stdout: {}", &std_out);
-        if !run_output.stderr.is_empty() {
-            println!("stderr: {}", &std_err);
-        }
-        println!("Exit code: {}", &exit_code);
-
-        assert_eq!(exit_code, 0, "Program did not exit successfully");
-        assert_eq!(std_err.is_empty(), true, "Program produced stderr output");
-        if let Some(expected_output) = expected {
-            assert_eq!(std_out.trim(), expected_output.trim(), "Program output did not match expected output");
+        // Write IR to clang's stdin
+        if let Some(stdin) = clang.stdin.as_mut() {
+            stdin
+                .write_all(ir_output.as_bytes())
+                .expect("Failed to write to clang stdin");
         }
 
-    } else {
-        println!("Compilation failed:");
-        println!("{}", String::from_utf8_lossy(&output.stderr));
+        // Wait for compilation to complete
+        let output = clang
+            .wait_with_output()
+            .expect("Failed to read clang output");
+
+        if output.status.success() {
+            println!("Compilation successful!");
+
+            // Run the executable
+            let run_output = Command::new(&outfile_invoke)
+                .output()
+                .expect("Failed to run executable");
+
+            let std_out = String::from_utf8_lossy(&run_output.stdout);
+
+            let exit_code = run_output.status.code().unwrap_or(-1);
+
+            let std_err = String::from_utf8_lossy(&run_output.stderr);
+
+            println!("Program output:");
+            println!("stdout: {}", &std_out);
+            if !run_output.stderr.is_empty() {
+                println!("stderr: {}", &std_err);
+            }
+            println!("Exit code: {}", &exit_code);
+
+            assert_eq!(exit_code, 0, "Program did not exit successfully");
+            assert_eq!(std_err.is_empty(), true, "Program produced stderr output");
+            if let Some(expected_output) = expected {
+                assert_eq!(std_out.trim(), expected_output.trim(), "Program output did not match expected output");
+            }
+
+        } else {
+            println!("Compilation failed:");
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+        }
     }
 }
 
@@ -177,13 +215,13 @@ fn main() {
         return x + y;
     }
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
 fn test_assignment() {
     let source = "x: i64 = 5; y: i64 = 10;";
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -193,7 +231,7 @@ fn test_function() {
         return a + b;
     }
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -206,7 +244,7 @@ fn test_if_statement() {
         y: i64 = 30;
     }
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -220,7 +258,7 @@ fn test_block() {
         }
     }
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -240,7 +278,7 @@ fn test_function_call() {
     }
     result: i64 = foo(10);
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -250,7 +288,7 @@ fn test_casting() {
     y: i32 = x as i32;
     z: i64 = x + y;
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -260,7 +298,7 @@ fn test_coercion() {
     y: i8 = 10;
     z: i64 = x + y; // Implicit coercion from i32 to i64
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -269,7 +307,7 @@ fn test_unary_op() {
     x: i64 = -5;
     y: i64 = - x + 2;
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -277,7 +315,7 @@ fn test_unary_op_const() {
     let source = r#"
     x: i64 = - ( - 4 - 2 );
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -286,7 +324,7 @@ fn test_printf() {
     str: string = "Hello, World!";
     printf(str);
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -328,7 +366,7 @@ fn test_class() {
     };
     
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -350,7 +388,7 @@ fn test_method_call() {
     ent.name = "Test Entity";
     result: string = ent.name();
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -374,7 +412,7 @@ fn test_simple_class() {
         }
     };
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
@@ -402,5 +440,5 @@ fn test_simple_inheritance() {
         }
     };
     "#;
-    process(source, None);
+    process(source, None, false);
 }
