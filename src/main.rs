@@ -15,6 +15,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use tokenizer::tokenize;
 use std::backtrace::Backtrace;
+use std::thread;
 
 fn get_caller_name() -> Option<String> {
     let bt = Backtrace::capture();
@@ -68,7 +69,7 @@ fn process(source: &str, expected: Option<String>, print_asm: bool) {
 
     let _block = ast.parse();
 
-    print_block(&_block, 0);
+    // print_block(&_block, 0);
 
     let mut llvm = llvm::LLVM::new(ast);
 
@@ -139,6 +140,9 @@ fn process(source: &str, expected: Option<String>, print_asm: bool) {
         if output.status.success() {
             println!("Compilation successful!");
 
+            // Wait a little bit to make sure the file has been created
+            thread::sleep(std::time::Duration::from_millis(1000));
+
             // Run the executable
             let run_output = Command::new(&outfile_invoke)
                 .output()
@@ -166,6 +170,7 @@ fn process(source: &str, expected: Option<String>, print_asm: bool) {
         } else {
             println!("Compilation failed:");
             println!("{}", String::from_utf8_lossy(&output.stderr));
+            panic!("");
         }
     }
 }
@@ -267,7 +272,7 @@ fn test_variable_declaration() {
     x: i64 = 42;
     y: i64 = 100;
     "#;
-    process(source, None);
+    process(source, None, false);
 }
 
 #[test]
