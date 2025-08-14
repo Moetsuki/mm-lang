@@ -344,6 +344,20 @@ impl LLVM {
         }
     }
 
+    fn type_is_signed(&self, t: &Type) -> bool {
+        match t {
+            Type::I8 => true,
+            Type::I16 => true,
+            Type::I32 => true,
+            Type::I64 => true,
+            Type::U8 => false,
+            Type::U16 => false,
+            Type::U32 => false,
+            Type::U64 => false,
+            _ => panic!("Unsupported type {} for LLVM IR type_is_signed", t),
+        }
+    }
+
     pub fn compile(&mut self) {
         self.prologue.push(format!("\n; PROLOGUE"));
         self.prologue
@@ -1368,8 +1382,9 @@ impl LLVM {
                     }
                     ">" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp gt {} %{}, %{}",
+                            "%{} = icmp {}gt {} %{}, %{}",
                             eval.register.to_string(),
+                            if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
                             result_llvm_type,
                             left_converted.to_string(),
                             right_converted.to_string()
@@ -1377,8 +1392,9 @@ impl LLVM {
                     }
                     "<" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp lt {} %{}, %{}",
+                            "%{} = icmp {}lt {} %{}, %{}",
                             eval.register.to_string(),
+                            if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
                             result_llvm_type,
                             left_converted.to_string(),
                             right_converted.to_string()
@@ -1386,8 +1402,9 @@ impl LLVM {
                     }
                     ">=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp ge {} %{}, %{}",
+                            "%{} = icmp {}ge {} %{}, %{}",
                             eval.register.to_string(),
+                            if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
                             result_llvm_type,
                             left_converted.to_string(),
                             right_converted.to_string()
@@ -1395,8 +1412,9 @@ impl LLVM {
                     }
                     "<=" => {
                         eval.epilogue.push(format!(
-                            "%{} = icmp le {} %{}, %{}",
+                            "%{} = icmp {}le {} %{}, %{}",
                             eval.register.to_string(),
+                            if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
                             result_llvm_type,
                             left_converted.to_string(),
                             right_converted.to_string()
