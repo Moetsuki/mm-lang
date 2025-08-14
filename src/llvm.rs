@@ -579,7 +579,7 @@ impl LLVM {
                     // Compare condition with zero
                     let cmp_register = Register::new(Type::Bool);
                     eval.epilogue.push(format!(
-                        "%{} = icmp ne i64 %{}, 0",
+                        "%{} = icmp ne i1 %{}, 0",
                         cmp_register.to_string(),
                         condition_eval.register.to_string()
                     ));
