@@ -103,7 +103,7 @@ impl Ast {
                             Token::Punctuation(p) if p == ":" => {
                                 let mut var_info = Variable {
                                     name: name_clone,
-                                    var_type: Type::ToBeEvaluated, // Default type, will be set later
+                                    var_type: Type::ToBeEvaluated("invalid".to_string()), // Default type, will be set later
                                 };
 
                                 // Get next token and make sure its an identifier and a valid type
@@ -112,7 +112,7 @@ impl Ast {
                                     match &type_token.token {
                                         Token::Identifier(type_name) => {
                                             var_info.var_type = Type::from_str(type_name)
-                                                .unwrap_or(Type::ToBeEvaluated);
+                                                .unwrap_or(Type::ToBeEvaluated(type_name.clone()));
                                             self.next_token(); // consume the type identifiers
                                             self.expect_operator(); // consume the = sign
                                             let expr = self.parse_expr();
@@ -140,7 +140,7 @@ impl Ast {
                                 statements.push(Statement::Assignment {
                                     identifier: Expression::Variable(Variable {
                                         name: name_clone,
-                                        var_type: Type::ToBeEvaluated,
+                                        var_type: Type::ToBeEvaluated("invalid".to_string()),
                                     }),
                                     value: expr,
                                 });
@@ -152,7 +152,7 @@ impl Ast {
                                 // Handle function call case
                                 let callee = Expression::Variable(Variable {
                                     name: name_clone,
-                                    var_type: Type::ToBeEvaluated,
+                                    var_type: Type::ToBeEvaluated("invalid".to_string()),
                                 });
                                 let call_statement = self.parse_call(callee);
                                 statements.push(call_statement);
@@ -416,11 +416,18 @@ impl Ast {
                     self.pos -= 1; // Put the token back for the caller to handle
                     break;
                 }
+                Token::Punctuation(p) if p == "{" => {
+                    let block = self.parse();
+
+                    self.expect(&Token::Punctuation("}".to_string()));
+
+                    statements.push(Statement::Block { body: block });
+                }
                 _ => {
                     //
                     // Handle other tokens
                     //
-                    println!(
+                    panic!(
                         "Unexpected token: {:?} at line {} column {}",
                         lexical_token.token, lexical_token.line, lexical_token.column
                     );
@@ -526,7 +533,7 @@ impl Ast {
                     self.next_token();
                     Expression::Variable(Variable {
                         name: name_clone,
-                        var_type: Type::ToBeEvaluated,
+                        var_type: Type::ToBeEvaluated("invalid".to_string()),
                     })
                 }
                 Token::Punctuation(p) if p == "(" => {
