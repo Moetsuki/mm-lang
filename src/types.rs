@@ -37,7 +37,7 @@ pub enum Type {
     Array(Box<Type>),
     UserType(String, Box<Type>),
     Pointer(Box<Type>),
-    ToBeEvaluated,
+    ToBeEvaluated(String),
 }
 
 impl Type {
@@ -130,7 +130,7 @@ impl Display for Type {
             Type::UserType(name, typ) => {
                 format!("usertype {} <{}>", name, typ.to_string())
             },
-            Type::ToBeEvaluated => "TBE".to_string(),
+            Type::ToBeEvaluated(tbe_str) => tbe_str.to_string(),
         };
         write!(f, "{}", fmtstr)
     }
@@ -212,7 +212,7 @@ impl Hash for Type {
                 name.hash(state);
                 typ.hash(state);
             }
-            Type::ToBeEvaluated => "TBE".hash(state),
+            Type::ToBeEvaluated(tbe_str) => tbe_str.hash(state),
         }
     }
 }

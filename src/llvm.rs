@@ -66,15 +66,40 @@ impl Scope {
         None
     }
 
-    pub fn find(&self, variable: &Variable) -> Option<&Register> {
-        for scope in self.stack.iter().rev() {
-            for symbol in scope.symbols.iter() {
-                if symbol.1.name == variable.name {
-                    return Some(symbol.0);
-                }
+    pub fn pop_by_name(&mut self, name: &str) -> Option<(Register, Variable)> {
+        let mut result : Option<(Register, Variable)> = None;
+
+        self.stack.iter_mut().rev().for_each(|scope| {
+            let res = scope.symbols.iter().find(|s| s.1.name == name);
+
+            if let Some(r) = res {
+                result = Some((r.0.clone(), r.1.clone()));
             }
-        }
-        None
+
+            result.as_ref().map(|_| {
+                if let Some((k, _v)) = scope.symbols.iter().find(|s| s.1.name == name) {
+                    scope.symbols.remove(&k.clone());
+                }
+            });
+        });
+
+        result
+    }
+
+    pub fn find_by_name(&self, name: &str) -> Option<(Register, Variable)> {
+        let mut result : Option<(Register, Variable)> = None;
+
+        self.stack.iter().rev().for_each(|scope| {
+            let res = scope.symbols
+                .iter()
+                .find(|s| s.1.name == name);
+
+            if let Some(r) = res {
+                result = Some((r.0.clone(), r.1.clone()));
+            }
+        });
+
+        result
     }
 
     pub fn exists(&self, variable: &Variable) -> bool {
@@ -98,6 +123,16 @@ impl Scope {
             }
         }
         None
+    }
+
+    pub fn debug(&self) {
+        self.stack.iter().for_each(|entry| {
+            entry
+                .symbols
+                .iter()
+                .for_each(|symbol| println!("{:?}\n", symbol));
+            println!("-------------------");
+        });
     }
 }
 
@@ -373,6 +408,7 @@ impl LLVM {
         self.main_prologue.push(format!("entry:\n"));
 
         let eval = self.transform();
+
         self.main.instructions.extend(eval.prologue.instructions);
         self.main.instructions.extend(eval.epilogue.instructions);
 
@@ -381,6 +417,7 @@ impl LLVM {
         self.main_epilogue.push(format!("}}"));
 
         self.scope.exit_scope(); // Exit binding scope
+
     }
 
     pub fn output(&self) -> String {
@@ -406,7 +443,7 @@ impl LLVM {
         let mut eval = Evaluation {
             prologue: IR::new(),
             epilogue: IR::new(),
-            register: Register::new(Type::ToBeEvaluated),
+            register: Register::new(Type::ToBeEvaluated("invalid_reg".to_string())),
             current_class_context: None,
             current_struct_context: None,
         };
@@ -415,6 +452,14 @@ impl LLVM {
 
         for statement in statements {
             match statement {
+                Statement::Block { body } => {
+                    let result = self.transform_block(&body.statements);
+                    
+                    result.map(|r| {
+                        eval.prologue.instructions.extend(r.prologue.instructions);
+                        eval.epilogue.instructions.extend(r.epilogue.instructions);
+                    });
+                }
                 Statement::VariableDecl {
                     identifier: var_info,
                     value,
@@ -422,53 +467,126 @@ impl LLVM {
                     let value_eval = self.transform_expression(value.clone());
                     eval.prologue
                         .instructions
-                        .extend(value_eval.prologue.instructions);
+                        .extend(value_eval.prologue.instructions.clone());
                     eval.epilogue
                         .instructions
-                        .extend(value_eval.epilogue.instructions);
+                        .extend(value_eval.epilogue.instructions.clone());
+                   
+                     println!("{{Statement::VariableDecl}}\n"); 
+                     println!("{:?}", statement.clone());
+
+                     println!("  + [Identifier]");
+                     println!("      | [var_info]");
+                     println!("      +-----+ {:?}\n", var_info.clone());
+                     println!("      | [value]");
+                     println!("      +-----+ {}\n", value.clone());
+                     println!("      | [value_eval]");
+                     println!("      +-----+ {:?}\n", value_eval.clone());
+                     println!("  + [Value]");
+                     println!("      | [value_eval.register.var_type]");
+                     println!("      +-----+ {}\n", value_eval.register.var_type.clone());
+                     println!("  + [Type]");
+                     println!("      | [var_info.var_type]");
+                     println!("      +-----+ {}\n", var_info.var_type.clone());
 
                     // Handle type coercion if needed
-                    let final_register = if value_eval.register.var_type != var_info.var_type
-                        && var_info.var_type != Type::ToBeEvaluated
-                    {
-                        self.insert_type_conversion(
-                            &mut eval.epilogue,
-                            &value_eval.register,
-                            &var_info.var_type,
-                        )
+                    let coerced_register = if value_eval.register.var_type != var_info.var_type {       
+                        match &var_info.var_type {
+                            Type::ToBeEvaluated(..) => value_eval.register.clone(),
+                            _ => {
+                                self.insert_type_conversion(
+                                    &mut eval.epilogue,
+                                    &value_eval.register,
+                                    &var_info.var_type,
+                                )
+                            }
+                        }
                     } else {
-                        value_eval.register
+                        value_eval.register.clone()
                     };
 
-                    // Use the final_register directly as the variable's register
-                    self.scope.insert(final_register.clone(), var_info.clone());
+                    // If its TBE search for class or struct on scope
+                    let final_type = match &var_info.var_type {
+                        Type::ToBeEvaluated(tbe_type) => {
+                            self.class_definitions
+                                .get(tbe_type)
+                                .map(|c| {
+                                    self.get_class_type(&c.name)
+                                })
+                                .unwrap_or(var_info.var_type.clone())
+                        }
+                        _ => {
+                            var_info.var_type.clone()
+                        }
+                    };
+                    let mut final_variable = var_info.clone();
+                    final_variable.var_type = final_type;
+                    
+                    let mut new_symbol : (Register, Variable) = (coerced_register.clone(), final_variable.clone());
+                    self.scope.insert(new_symbol.0.clone(), new_symbol.1.clone());
+                    // println!("     + New Symbol =\n{:?}", new_symbol.clone());
                 }
                 Statement::Assignment {
                     identifier: lhs,
                     value: rhs,
                 } => match lhs {
-                    Expression::Variable(var_info) => {
+                    Expression::Variable(_var_info) => {
                         let rhs_eval = self.transform_expression(rhs.clone());
                         eval.prologue
                             .instructions
-                            .extend(rhs_eval.prologue.instructions);
+                            .extend(rhs_eval.prologue.instructions.clone());
                         eval.epilogue
                             .instructions
-                            .extend(rhs_eval.epilogue.instructions);
+                            .extend(rhs_eval.epilogue.instructions.clone());
+
+                        let lhs_eval = self.transform_expression(lhs.clone());
+                        eval.prologue
+                            .instructions
+                            .extend(lhs_eval.prologue.instructions.clone());
+                        eval.epilogue
+                            .instructions
+                            .extend(lhs_eval.epilogue.instructions.clone());
+
+                        // println!("lhs = {:?}", lhs);
+                        // println!("rhs = {:?}", rhs);
+                        // println!("rhs_eval = {:?}", rhs_eval.clone());
+                        // println!("lhs_eval = {:?}", lhs_eval.clone());
 
                         // Handle type coercion if needed
-                        let coerced_register = if rhs_eval.register.var_type != var_info.var_type {
+                        let coerced_register = if rhs_eval.register.var_type != lhs_eval.register.var_type {
                             self.insert_type_conversion(
                                 &mut eval.epilogue,
                                 &rhs_eval.register,
-                                &var_info.var_type,
+                                &lhs_eval.register.var_type,
                             )
                         } else {
                             rhs_eval.register
                         };
 
-                        eval.register = coerced_register.clone();
-                        self.scope.insert(eval.register.clone(), var_info.clone());
+                        let result_register = Register::new(coerced_register.var_type.clone());
+                        
+                        eval.prologue.instructions.push(format!(
+                            "%{} = add {} 0, %{}",
+                            result_register.to_string(),
+                            self.type_to_llvm(&lhs_eval.register.var_type),
+                            coerced_register.to_string(),
+                        ));
+
+                        eval.register = lhs_eval.register.clone();
+
+                        // Check if it already exists in scope and replce the register with a new
+                        // one that holds the result
+                        let mut res = self.scope.pop_by_name(&_var_info.name);
+
+                        res.as_mut().map(|r| { 
+                            r.0 = result_register.clone();
+
+                            self.scope.insert(r.0.clone(), r.1.clone());
+                        });
+
+                        if res.is_none() {
+                            self.scope.insert(result_register, _var_info.clone());
+                        }
                     }
                     Expression::FieldAccess { object: lhs, field } => {
                         let object_eval = self.transform_expression(*lhs.clone());
@@ -1191,15 +1309,16 @@ impl LLVM {
                     ));
                     let mut method_sigs = Vec::new();
                     for (method, class_name) in &all_methods {
-                        let (fun, cl, nm) = if let Statement::Function { name, .. } = method.0.as_ref() {
-                            (format!(
-                                "  ptr @__{}_{}",
-                                class_name,
-                                name,
-                            ), class_name, name)
-                        } else {
-                            panic!("Expected function statement for class method");
-                        };
+                        let (fun, cl, nm) =
+                            if let Statement::Function { name, .. } = method.0.as_ref() {
+                                (
+                                    format!("  ptr @__{}_{}", class_name, name,),
+                                    class_name,
+                                    name,
+                                )
+                            } else {
+                                panic!("Expected function statement for class method");
+                            };
                         method_sigs.push((fun, cl.to_string(), nm.to_string()));
                     }
                     self.prologue.push(
@@ -1216,7 +1335,7 @@ impl LLVM {
                                 )
                             })
                             .collect::<Vec<_>>()
-                            .join("\n")
+                            .join("\n"),
                     );
                     self.prologue.push(format!("}}"));
                 }
@@ -1239,7 +1358,7 @@ impl LLVM {
         let mut eval = Evaluation {
             prologue: IR::new(),
             epilogue: IR::new(),
-            register: Register::new(Type::ToBeEvaluated),
+            register: Register::new(Type::ToBeEvaluated("invalid_reg".to_string())),
             current_class_context: None,
             current_struct_context: None,
         };
@@ -1276,12 +1395,12 @@ impl LLVM {
                 eval.register.var_type = Type::String;
             }
             Expression::Variable(var) => {
-                let var_register = self
+                let var_symbol = self
                     .scope
-                    .find(&var)
+                    .find_by_name(&var.name)
                     .expect(format!("Variable {} not found in scope", var.name).as_str());
 
-                eval.register = var_register.clone();
+                eval.register = var_symbol.0.clone();
             }
             Expression::BinaryOp { op, left, right } => {
                 let left_eval = self.transform_expression(*left);
@@ -1578,11 +1697,161 @@ impl LLVM {
 
                 eval.register.var_type = target_type;
             }
-            Expression::MethodCall { .. } => {
-                // Handle method calls
-                // This will require resolving the object type and method name
-                // For now, we will panic if we encounter this case
-                panic!("Method calls are not yet implemented in LLVM IR transformation");
+            Expression::MethodCall {
+                object,
+                method,
+                args: _args,
+            } => {
+                println!("{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    format!("Expression::MethodCall"),
+                    format!("      | [object]"),
+                    format!("      +-----+ {:?}\n", object.clone()),
+                    format!("      | [method]"),
+                    format!("      +-----+ {:?}\n", method.clone()),
+                    format!("      | [args]"),
+                    format!("      +-----+ {:?}\n", _args.clone()),
+                );
+
+                // Evaluate the base object (e.g., `self` or `this`)
+                let object_eval = match &*object {
+                    Expression::Variable(var) if var.name == "self" => {
+                        println!("------+ Expression::MethodCall -- `self` Specific Case");
+
+                        // Ensure we are in a class scope
+                        let class_scope = self
+                            .current_class_scope
+                            .as_ref()
+                            .expect("Field access requires a class scope");
+
+                        // `self` or `this` points to the current class
+                        let _class_type = Type::Pointer(Box::new(match &class_scope.statement {
+                            Statement::Class { .. } => self.get_class_type(&class_scope.name),
+                            _ => panic!("Expected class statement for 'self'"),
+                        }));
+
+                        // Find `self` from the current variable scope
+                        let mut self_symbol = self
+                            .scope
+                            .pop_by_name("self")
+                            .expect("Expected 'self' variable in class scope");
+
+                        self_symbol.0 = Register::new(_class_type);
+
+                        self.scope.insert(self_symbol.0.clone(), self_symbol.1.clone());
+
+                        Evaluation {
+                            prologue: IR::new(),
+                            epilogue: IR::new(),
+                            register: self_symbol.0.clone(),
+                            current_class_context: self.current_class_scope.as_deref().cloned(),
+                            current_struct_context: None,
+                        }
+                    }
+                    _ => {
+                        self.transform_expression(*object)
+                    }
+                };
+
+                eval.prologue
+                    .instructions
+                    .extend(object_eval.prologue.instructions.clone());
+                eval.epilogue
+                    .instructions
+                    .extend(object_eval.epilogue.instructions.clone());
+
+                println!("{}\n{}\n",
+                    format!("| [Object Evaluation]"),
+                    format!("+-----+ {:?}", object_eval.clone())
+                );
+
+                // Ensure the object is a pointer to a class
+                let class_name = match &object_eval.register.var_type {
+                    Type::Pointer(inner_type) => match &**inner_type {
+                        Type::Class { name, .. } => name.clone(),
+                        _ => panic!("Method access on non-class pointer"),
+                    },
+                    _ => panic!("Method access on non-pointer type"),
+                };
+
+                let method_class = self.class_definitions.get(&class_name).unwrap_or_else(|| panic!(
+                    "Failed to find class {} in class definitions",
+                    class_name
+                ));
+
+                let owning_class = self
+                    .class_definitions
+                    .get(&method_class.name)
+                    .unwrap_or_else(|| panic!(
+                        "Class {} not found in class definitions",
+                        method_class.name
+                    ));
+
+                println!("{}\n{}\n",
+                    format!("| [Owning Class]"),
+                    format!("+-----+ {:?}", owning_class.clone())
+                );
+
+                // PROCEDURE
+                //
+                // ; Step 1: Load vtable from %self (field 0)
+                // %vtable_ptr_ptr = getelementptr inbounds %Point, ptr %self, i32 0, i32 0
+                // %vtable_ptr = load ptr, ptr %vtable_ptr_ptr
+
+                // ; Step 2: Load get_x function pointer (index 2 in vtable)
+                // %get_x_ptr_ptr = getelementptr inbounds %PointVTable, ptr %vtable_ptr, i32 0, i32 2
+                // %get_x_ptr_raw = load ptr, ptr %get_x_ptr_ptr
+
+                // ; Step 3: Cast the function pointer to correct type: i32(ptr) -> i32
+                // %get_x_fn = bitcast ptr %get_x_ptr_raw to ptr (ptr) -> i32
+
+                // ; Step 4: Call the function, passing %self as the receiver (like 'this')
+                // %result = call i32 %get_x_fn(ptr %self)
+
+                // GEP to get the first pointer to vtable
+                eval.prologue.instructions.push(format!(
+                    "%vtable_ptr_ptr = getelementptr inbounds %{}, ptr %{}, i32 0, i32 0",
+                    method_class.name,
+                    object_eval.register.to_string()
+                ));
+                eval.prologue
+                    .instructions
+                    .push(format!("%vtable_ptr = load ptr, ptr %vtable_ptr_ptr"));
+
+                // Get the method pointer by finding its index in the vtable
+                // From the class name we can find all_methods and the index of that
+                // is the index in the VTable
+                let (method_idx, method_entry) = owning_class
+                    .all_methods
+                    .iter()
+                    .enumerate()
+                    .find(|(_i, ((m, _vis), _name))| match &**m {
+                        Statement::Function { name, .. } => *name == method,
+                        _ => false,
+                    })
+                    .map(|(i, ((m, _vis), _name))| (i, m))
+                    .expect(&format!(
+                        "Method '{}' not found in class '{}'",
+                        method, method_class.name
+                    ));
+                let method_ret = match &**method_entry {
+                    Statement::Function { ret_type, .. } => ret_type,
+                    _ => panic!("Method statement {:?} isn't a function!", method_entry),
+                };
+
+                // Load method from vtable by index
+                eval.prologue.instructions.push(format!(
+                    "%method_ptr_ptr = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
+                    method_class.name,
+                    object_eval.register.to_string(),
+                    method_idx
+                ));
+                eval.prologue
+                    .instructions
+                    .push(format!("%method_ptr_raw = load ptr, ptr %method_ptr_ptr"));
+                eval.prologue.instructions.push(format!(
+                    "%method_fn = bitcast ptr %method_ptr_raw to ptr (ptr) -> {}",
+                    self.type_to_llvm(&method_ret)
+                ));
             }
             Expression::FieldAccess { object, field } => {
                 // Evaluate the base object (e.g., `self` or `this`)
@@ -1595,24 +1864,21 @@ impl LLVM {
                             .expect("Field access requires a class scope");
 
                         // `self` or `this` points to the current class
-                        let class_type = Type::Pointer(Box::new(match &class_scope.statement {
+                        let _class_type = Type::Pointer(Box::new(match &class_scope.statement {
                             Statement::Class { .. } => self.get_class_type(&class_scope.name),
                             _ => panic!("Expected class statement for 'self'"),
                         }));
 
                         // Find `self` from the current variable scope
-                        let self_register = self
+                        let self_symbol = self
                             .scope
-                            .find(&Variable {
-                                name: "self".to_string(),
-                                var_type: class_type.clone(),
-                            })
+                            .find_by_name("self")
                             .expect("Expected 'self' variable in class scope");
 
                         Evaluation {
                             prologue: IR::new(),
                             epilogue: IR::new(),
-                            register: self_register.clone(),
+                            register: self_symbol.0.clone(),
                             current_class_context: self.current_class_scope.as_deref().cloned(),
                             current_struct_context: None,
                         }
@@ -1664,7 +1930,7 @@ impl LLVM {
 
                 // Generate GEP instruction to get the field pointer
                 let field_ptr_register = Register::new(field_var.var_type.clone());
-                eval.epilogue.push(format!(
+                eval.prologue.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
                     field_ptr_register.to_string(),
                     field_class.name,
@@ -1680,7 +1946,7 @@ impl LLVM {
                     } else {
                         // Load the value if it's not a class pointer
                         let field_value_register = Register::new(field_type.clone());
-                        eval.epilogue.push(format!(
+                        eval.prologue.push(format!(
                             "%{} = load {}, {}* %{}",
                             field_value_register.to_string(),
                             self.type_to_llvm(&field_type),
@@ -1692,7 +1958,7 @@ impl LLVM {
                 } else {
                     // Load the value if it's not a pointer
                     let field_value_register = Register::new(field_type.clone());
-                    eval.epilogue.push(format!(
+                    eval.prologue.push(format!(
                         "%{} = load {}, {}* %{}",
                         field_value_register.to_string(),
                         self.type_to_llvm(&field_type),
@@ -1706,7 +1972,7 @@ impl LLVM {
                 match *callee {
                     Expression::Variable(var) => {
                         // Find the function in the current scope
-                        let func = self.scope.find(&var);
+                        let func = self.scope.find_by_name(&var.name);
 
                         // Find the class in the current scope
                         let class = self.class_definitions.get(&var.name).or_else(|| {
@@ -1736,7 +2002,7 @@ impl LLVM {
                             }
                             (format!("__{}_init", class_name), true)
                         } else {
-                            eval.register.var_type = func.as_ref().unwrap().var_type.clone();
+                            eval.register.var_type = func.as_ref().unwrap().1.var_type.clone();
                             (var.name.clone(), false)
                         };
 
