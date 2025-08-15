@@ -447,3 +447,21 @@ fn test_simple_inheritance() {
     "#;
     process(source, None, false);
 }
+
+#[test]
+fn test_simple_constructor() {
+    let source = r#"
+    class Point {
+        public x: i32;
+        public y: i32;
+
+        init(x: i32, y: i32) {
+            self.x = x;
+            self.y = y;
+        }
+    };
+
+    p : Point = Point(6, 9);
+    "#;
+    process(source, None, false);
+}
