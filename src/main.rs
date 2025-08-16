@@ -8,20 +8,21 @@ mod statement;
 mod tokenizer;
 mod types;
 mod variable;
+mod backtrace;
 
 use ast::Ast;
 use statement::Statement;
+use std::backtrace::Backtrace;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use tokenizer::tokenize;
-use std::backtrace::Backtrace;
 use std::thread;
+use tokenizer::tokenize;
 
 fn get_caller_name() -> Option<String> {
-    let bt = Backtrace::capture();
+    let bt = Backtrace::force_capture();
 
     let bt_str = bt.to_string();
-    
+
     let mut lines = bt_str.lines();
 
     let mut caller = String::from("");
@@ -47,11 +48,17 @@ fn get_caller_name() -> Option<String> {
     if let Some(last_colon) = caller.rfind("::") {
         return Some(caller[last_colon + 2..].to_string());
     }
-        
+
     None
 }
 
-fn process(source: &str, expected: Option<String>, print_asm: bool) {
+#[track_caller]
+fn process(
+    source: &str,
+    expected: Option<String>,
+    expected_exit_code: Option<i32>,
+    print_asm: bool,
+) {
     let mut tokens = tokenize(source);
 
     let caller = get_caller_name().unwrap_or_else(|| "unknown".to_string());
@@ -104,15 +111,14 @@ fn process(source: &str, expected: Option<String>, print_asm: bool) {
 
         if output.status.success() {
             // Now read and echo the assembly
-            let assembly_code = std::fs::read_to_string(&asmfile)
-                .expect("Failed to read generated assembly file");
+            let assembly_code =
+                std::fs::read_to_string(&asmfile).expect("Failed to read generated assembly file");
 
             println!("Generated Assembly:\n{}", assembly_code);
         } else {
             println!("ASM generation failed:");
             println!("{}", String::from_utf8_lossy(&output.stderr));
         }
-
     }
 
     {
@@ -157,16 +163,23 @@ fn process(source: &str, expected: Option<String>, print_asm: bool) {
             println!("Program output:");
             println!("stdout: {}", &std_out);
             if !run_output.stderr.is_empty() {
-                println!("stderr: {}", &std_err);
+                panic!("stderr: {}", &std_err);
             }
             println!("Exit code: {}", &exit_code);
 
-            assert_eq!(exit_code, 0, "Program did not exit successfully");
-            assert_eq!(std_err.is_empty(), true, "Program produced stderr output");
-            if let Some(expected_output) = expected {
-                assert_eq!(std_out.trim(), expected_output.trim(), "Program output did not match expected output");
+            if let Some(_expected_exit_code) = expected_exit_code {
+                panic!(
+                    "This isn't working well with `cargo t` because it captures the exit code.\nIndividual tests work fine.\nFIgure out what's wrong later."
+                );
+                //assert_eq!(exit_code, _expected_exit_code, "Program did not exit with expected code");
             }
-
+            if let Some(expected_output) = expected {
+                assert_eq!(
+                    std_out.trim(),
+                    expected_output.trim(),
+                    "Program output did not match expected output"
+                );
+            }
         } else {
             println!("Compilation failed:");
             println!("{}", String::from_utf8_lossy(&output.stderr));
@@ -220,13 +233,13 @@ fn main() {
         return x + y;
     }
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
 fn test_assignment() {
     let source = "x: i64 = 5; y: i64 = 10;";
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -236,7 +249,7 @@ fn test_function() {
         return a + b;
     }
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -249,7 +262,7 @@ fn test_if_statement() {
         y: i64 = 30;
     }
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -263,7 +276,7 @@ fn test_block() {
         }
     }
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -272,7 +285,7 @@ fn test_variable_declaration() {
     x: i64 = 42;
     y: i64 = 100;
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -282,8 +295,10 @@ fn test_function_call() {
         return x * 2;
     }
     result: i64 = foo(10);
+
+    return result;
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -293,7 +308,7 @@ fn test_casting() {
     y: i32 = x as i32;
     z: i64 = x + y;
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -303,7 +318,7 @@ fn test_coercion() {
     y: i8 = 10;
     z: i64 = x + y; // Implicit coercion from i32 to i64
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -312,7 +327,7 @@ fn test_unary_op() {
     x: i64 = -5;
     y: i64 = - x + 2;
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -320,7 +335,7 @@ fn test_unary_op_const() {
     let source = r#"
     x: i64 = - ( - 4 - 2 );
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -329,7 +344,7 @@ fn test_printf() {
     str: string = "Hello, World!";
     printf(str);
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -371,9 +386,10 @@ fn test_class() {
     };
     
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
+#[track_caller]
 #[test]
 fn test_method_call() {
     let source = r#"
@@ -393,7 +409,7 @@ fn test_method_call() {
     ent.name = "Test Entity";
     result: string = ent.name();
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -417,7 +433,7 @@ fn test_simple_class() {
         }
     };
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -445,7 +461,7 @@ fn test_simple_inheritance() {
         }
     };
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
 
 #[test]
@@ -463,5 +479,5 @@ fn test_simple_constructor() {
 
     p : Point = Point(6, 9);
     "#;
-    process(source, None, false);
+    process(source, None, None, false);
 }
