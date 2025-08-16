@@ -1,35 +1,43 @@
-# MM-Lang Programming Language
+# MM‑Lang Programming Language
 
-A custom programming language compiler written in Rust that lowers to LLVM IR.
+A small, statically typed language compiler written in Rust that lowers to LLVM IR with executable output via Clang.
 
 ## Overview
 
-MM-Lang is a small, statically‑typed, expression–oriented language with C / Rust inspired surface syntax. The current prototype supports:
+MM‑Lang has a C/Rust‑inspired surface syntax. As of now, all tests pass and core language features are implemented end‑to‑end (tokenize → parse → codegen → link → run).
 
-**Fully Working Features (Tested):**
-- Explicit variable declarations with type annotations
-- Arithmetic, comparison, unary `-` and logical negation `!`
-- Implicit numeric coercions (widening) & explicit casts with `as`
-- Blocks, if / else control flow
-- Basic I/O operations via `printf` binding
-- String literals (lowered to C strings)
-- Function definitions and function calls (basic functionality working)
+Test status: 16 passed, 0 failed (via `cargo test`).
 
-**Partially Working Features:**
-- Single inheritance classes with fields and visibility modifiers (AST parsing works, simple class definitions compile)
-- Constructor syntax via `init { ... }` blocks (parsed but LLVM codegen has limitations)
+### Fully working (tested)
+- Variable declarations with explicit types and assignments
+- Arithmetic and comparisons; unary `-` and logical negation `!`
+- Implicit integer widening and explicit casts using `as`
+- Blocks and if/else control flow with proper scoping
+- String literals (lowered to private constant C strings)
+- C interop: `printf`, `scanf`, `malloc`, `free`
+- Functions: definitions, calls, return values
+- Classes (single inheritance):
+    - Fields with visibility markers (public/private/protected) [parsing and layout]
+    - Constructors via `init(...) { ... }`
+    - Field access (`obj.field`) and assignment
+    - Method calls with dynamic dispatch via per‑class vtables
 
-**In Development:**
-- Method calls and field access (parsing works, codegen has issues with complex inheritance)
-- Advanced class features like proper vtable inheritance and method dispatch
-
-> NOTE: The compiler successfully parses most language constructs and generates LLVM IR for basic operations, functions, and simple classes. Advanced features like complex class inheritance and method calls are still under development in the LLVM backend.
+### Known limitations (current behavior)
+- Visibility keywords are parsed and preserved in types, but enforcement is not performed yet.
+- Numeric literals are integers; float literals aren’t tokenized yet (float types exist for future use).
+- Arrays, modules/imports, pattern matching, and generics are not implemented.
+- Error reporting is panic‑driven and aimed at development use.
 
 ## Core Features
 
 ### Types
-Primitive & built‑in types:
-`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `string`.
+Primitive/built‑in:
+`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `string`, `none`.
+
+Composite and compiler types used in codegen:
+- `function name(args...) -> ret` (first‑class function type)
+- `class Name [: Parent] { fields, methods }` (lowered to `%Name` with `%NameVTable`)
+- `ptr<T>` pointers (used internally in codegen and interop)
 
 ### Variable Declarations / Assignment ✅
 ```mm
@@ -65,7 +73,7 @@ Arithmetic: `+ - * / %`
 
 Comparison: `== != < > <= >=` (lowered to integer comparisons).
 
-Unary: `-expr`, `!expr` (logical not on booleans / truthy integer values).
+Unary: `-expr`, `!expr` (logical not; non‑bools are compared against zero).
 
 ### Type Coercion & Casting ✅
 ```mm
@@ -84,10 +92,10 @@ String literals are lowered to private constant null‑terminated byte arrays. E
 msg: string = "Hello, World!";
 printf(msg);
 ```
-`printf` is declared automatically with a variadic signature. Additional C bindings: `scanf`, `malloc`, `free`.
+`printf` is declared automatically with a variadic signature. Additional C bindings provided: `scanf`, `malloc`, `free`.
 
-## Classes (Experimental) ⚠️
-Single inheritance with visibility modifiers and methods. **Note: Parsing works correctly, but LLVM code generation is incomplete.**
+## Classes ✅
+Single inheritance with fields, methods, and constructors. Dynamic dispatch is implemented via per‑class VTables.
 
 ```mm
 class Entity {
@@ -114,15 +122,13 @@ class Animal : Entity {
 };
 ```
 
-### Current Status:
-- ✅ Class declarations with inheritance
-- ✅ Field declarations with visibility modifiers
-- ✅ Method declarations  
-- ✅ Constructor `init` blocks with parameters
-- ⚠️ LLVM struct generation (partial)
-- ❌ Method calls and field access (codegen incomplete)
-- ❌ Proper vtable inheritance/dispatch
-- ❌ Visibility enforcement
+### Current class support:
+- ✅ Declarations with single inheritance
+- ✅ Field declarations with visibility markers (not enforced yet)
+- ✅ Methods and `init` constructors (called via `ClassName(...)`)
+- ✅ Field access (`obj.field`) and assignment
+- ✅ Method calls with dynamic dispatch through VTables
+- ⚠️ No visibility enforcement; no method overloading
 
 ## Example Program (Working Features)
 ```mm
@@ -147,74 +153,72 @@ if x > 3 {
 }
 ```
 
-## Updated Grammar (Provisional)
-EBNF sketch reflecting implemented constructs. Note: All parsing is implemented, but LLVM code generation is incomplete for some features.
+## Grammar (implemented subset)
+EBNF sketch reflecting constructs implemented today.
 
 ```ebnf
 program          = { statement } ;
 
-statement        = variable_decl        (* ✅ Working *)
-                 | assignment           (* ✅ Working for variables *)
-                 | function_def         (* ✅ Working *)
-                 | class_decl           (* ⚠️ Parsing works, simple classes compile *) 
-                 | if_statement         (* ✅ Working *)
-                 | return_statement     (* ✅ Working *)
-                 | expression_stmt      (* ⚠️ Limited support *)
-                 | block ;              (* ✅ Working *)
+statement        = variable_decl
+                 | assignment
+                 | function_def
+                 | class_decl
+                 | if_statement
+                 | return_statement
+                 | expression_stmt
+                 | block ;
 
-block            = "{" { statement } "}" ;                    (* ✅ Working *)
+block            = "{" { statement } "}" ;
 
-variable_decl    = identifier ":" type "=" expression ";" ;   (* ✅ Working *)
-assignment       = expression "=" expression ";" ;           (* ⚠️ Variables only *)
-return_statement = "return" expression ";" ;                 (* ✅ Working *)
-expression_stmt  = expression ";" ;                          (* ⚠️ Basic expressions only *)
+variable_decl    = identifier ":" type "=" expression ";" ;
+assignment       = expression "=" expression ";" ;
+return_statement = "return" expression ";" ;
+expression_stmt  = expression ";" ;
 
-function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ✅ Working *)
+function_def     = "function" identifier "(" [ param_list ] ")" "->" type block ;
 param_list       = param { "," param } ;
 param            = identifier ":" type ;
 
-class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ; (* ⚠️ *)
+class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ;
 class_member     = visibility field_decl
                  | visibility method_def  
                  | init_block ;
 
-visibility       = "public" | "private" | "protected" ;      (* ✅ Parsed *)
-field_decl       = identifier ":" type ";" ;                 (* ✅ Parsed *)
-method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ; (* ⚠️ *)
-init_block       = "init" "(" [ param_list ] ")" block ;     (* ⚠️ Parsed *)
+visibility       = "public" | "private" | "protected" ;
+field_decl       = identifier ":" type ";" ;
+method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ;
+init_block       = "init" "(" [ param_list ] ")" block ;
 
-if_statement     = "if" expression block [ "else" block ] ;  (* ✅ Working *)
+if_statement     = "if" expression block [ "else" block ] ;
 
-expression       = method_call          (* ⚠️ Parsed only *)
-                 | call                 (* ⚠️ Parsed only *)
-                 | binary ;             (* ✅ Working *)
+expression       = method_call
+                 | call
+                 | field_access
+                 | binary ;
 
-method_call      = primary "." identifier "(" [ arg_list ] ")" ; (* ❌ Parsing works, codegen fails *)
-call             = primary "(" [ arg_list ] ")" ;                (* ✅ Working *)
+method_call      = primary "." identifier "(" [ arg_list ] ")" ;
+field_access     = primary "." identifier ;
+call             = primary "(" [ arg_list ] ")" ;
 arg_list         = expression { "," expression } ;
 
-binary           = unary { bin_op unary } ;                  (* ✅ Working *)
-unary            = [ ("-" | "!") ] primary ;                 (* ✅ Working *)
-primary          = number                                     (* ✅ Working *)
-                 | string_literal                             (* ✅ Working *)
-                 | identifier                                 (* ✅ Working *)
-                 | cast                                       (* ✅ Working *)
-                 | "(" expression ")" ;                       (* ✅ Working *)
-cast             = primary "as" type ;                       (* ✅ Working *)
+binary           = unary { bin_op unary } ;
+unary            = [ ("-" | "!") ] primary ;
+primary          = number
+                 | string_literal
+                 | identifier
+                 | cast
+                 | "(" expression ")" ;
+cast             = primary "as" type ;
 
-bin_op           = "+" | "-" | "*" | "/" | "%" |             (* ✅ Working *)
-                   "==" | "!=" | "<" | ">" | "<=" | ">=" ;   (* ✅ Working *)
+bin_op           = "+" | "-" | "*" | "/" | "%" |
+                   "==" | "!=" | "<" | ">" | "<=" | ">=" ;
 
-type             = "bool" | "i8" | "i16" | "i32" | "i64" |   (* ✅ Working *)
-                   "u8" | "u16" | "u32" | "u64" |            (* ✅ Working *)
-                   "f32" | "f64" | "string" |                (* ✅ Working *)
-                   identifier ;          (* future: arrays / generics *)
+type             = "bool" | "i8" | "i16" | "i32" | "i64" |
+                   "u8" | "u16" | "u32" | "u64" |
+                   "f32" | "f64" | "string" | "none" |
+                   identifier ;
 ```
-
-**Legend:**
-- ✅ **Working**: Full parsing + LLVM codegen + tested
-- ⚠️ **Partial**: Parsing complete, LLVM codegen incomplete  
-- ❌ **Not implemented**: Neither parsing nor codegen
+All listed grammar constructs are parsed and code‑generated as described above.
 
 ## Project Structure
 ```
@@ -246,28 +250,11 @@ cargo build
 cargo run
 ```
 
-## Current Limitations & Known Issues
-
-### Working Features
-- ✅ All basic language constructs: variables, arithmetic, comparisons, type coercion/casting
-- ✅ Control flow: if/else statements, blocks, scoping
-- ✅ Unary operations and string literals
-- ✅ C interop: printf function calls
-- ✅ Function definitions and basic function calls
-- ✅ Simple class definitions (without complex inheritance)
-
-### Known Issues
-- ❌ **Complex class inheritance**: Field resolution fails with multi-level inheritance
-- ❌ **Method calls**: Type conversion issues in method dispatch
-- ❌ **Field access operations**: Some codegen limitations for object field access
-- ⚠️ **Type system**: Some edge cases in automatic type conversion for complex objects
-
-### Debug Information
-The compiler provides detailed AST output and LLVM IR generation traces. Failed tests show exactly where in the compilation pipeline issues occur, making it easy to track progress on incomplete features.
-
-### Specific Test Failure Details
-- **`test_class`**: Fails during complex inheritance field resolution - "Field 'id' not found in class 'Animal'" when trying to access inherited fields from parent classes
-- **`test_method_call`**: Fails with "Unsupported automatic conversion from ptr to i32" during method dispatch, indicating type system issues with object references
+## Current Limitations & Notes
+- Visibility is parsed but not enforced.
+- Float literals are not tokenized; only integer literals exist today.
+- Arrays, modules/imports, pattern matching, and generics are not implemented.
+- Error messages are primarily intended for development iteration.
 
 ## Testing
 
@@ -277,13 +264,12 @@ Run the test suite to see current implementation status:
 cargo test
 ```
 
-### Test Results Overview:
-- ✅ **Passing (12 tests)**: Basic variable declarations, arithmetic operations, type coercion/casting, unary operations, control flow (if/else), blocks, printf output, functions, function calls, and simple classes
-- ❌ **Failing (2 tests)**: Complex classes with inheritance, method calls - these features have parsing implemented but encounter LLVM code generation issues
+### Test Results Overview
+- Passing: 16/16
 
-### Individual Test Status:
+### Individual Tests
 - `test_variable_declaration` ✅
-- `test_assignment` ✅  
+- `test_assignment` ✅
 - `test_casting` ✅
 - `test_coercion` ✅
 - `test_unary_op` ✅
@@ -294,29 +280,30 @@ cargo test
 - `test_function` ✅
 - `test_function_call` ✅
 - `test_simple_class` ✅
-- `test_class` ❌ (Complex inheritance - field resolution issues)
-- `test_method_call` ❌ (Type conversion issues in method dispatch)
+- `test_simple_inheritance` ✅
+- `test_simple_constructor` ✅
+- `test_class` ✅
+- `test_method_call` ✅
 
 ## Roadmap
 
 ### ✅ Completed
-- [x] Basic arithmetic & control flow
-- [x] Variable declarations and assignments  
-- [x] Implicit widening & explicit casting
-- [x] Unary operators
-- [x] Strings & printf binding
-- [x] Function definitions and basic function calls
+- [x] Arithmetic, comparisons, unary ops
+- [x] Variables and assignments
+- [x] Implicit widening & explicit cast (`as`)
+- [x] Blocks and if/else
+- [x] Strings & `printf`
+- [x] Function definitions and calls
 - [x] Return statements
-- [x] Simple class definitions
-- [x] Class AST parsing & visibility modifiers
-- [x] Constructor `init` block parsing
-- [x] Inheritance parsing
+- [x] Class parsing (fields, visibility, methods, inheritance)
+- [x] Constructors (`init`) and object construction
+- [x] VTable generation and dynamic method dispatch
 
-### 🚧 In Progress  
-- [ ] Complex multi-level class inheritance (field resolution issues)
-- [ ] Method calls and field access (type conversion challenges)
-- [ ] Proper vtable inheritance & method dispatch
-- [ ] Constructor/destructor end-to-end implementation
+### 🚧 In Progress
+- [ ] Visibility enforcement
+- [ ] Float literals, arrays, modules/imports
+- [ ] Improved diagnostics
+- [ ] Extended standard library bindings
 
 ### 📋 Planned
 - [ ] Visibility enforcement in semantic analysis
@@ -335,35 +322,36 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 
 ## Architecture
 
-The compiler follows a traditional multi-stage architecture:
+Pipeline: Tokenize → Parse → Transform (LLVM IR) → Link via Clang → Run
 
-1. **Lexical Analysis** (`tokenizer.rs`) - Converts source code into tokens ✅
-2. **Syntax Analysis** (`ast.rs`) - Builds an Abstract Syntax Tree ✅  
-3. **Semantic Analysis** - Type checking and symbol resolution ⚠️ (works for basic features, issues with complex inheritance)
-4. **Code Generation** (`llvm.rs`) - Generates LLVM IR ✅ (works for most features, specific issues with inheritance field resolution and method dispatch)
-5. **Optimization** - LLVM optimizations (handled by LLVM) ✅
-6. **Code Emission** - Final machine code (handled by LLVM) ✅
-
-The current implementation successfully handles the lexical and syntax analysis phases for all planned language features. The LLVM code generation backend works well for functions, simple classes, and all basic operations but encounters specific issues with complex class inheritance field resolution and method call type conversion.
+Highlights:
+- Tokenizer recognizes keywords (`class`, `public`/`private`/`protected`, `init`, `as`, …), operators, and punctuation (including `->`).
+- Parser builds a rich AST including classes, method calls, field access, and casts.
+- LLVM backend:
+    - SSA‑like virtual registers with tracked types
+    - String constants lowered to private globals
+    - C interop declarations injected into the prologue
+    - Class layout with leading vtable pointer and field offsets
+    - Per‑class read‑only VTable constants and dynamic dispatch at call sites
 
 ## Future Roadmap
 
 ### Language Features
-- [x] Type casting with `as` keyword  
-- [x] Implicit type coercion for compatible types
-- [x] Basic I/O operations (printf)
-- [ ] Advanced type system with generics
-- [ ] Module system and imports  
-- [ ] Standard library
+- [x] Casts with `as`, implicit integer widening
+- [x] Basic I/O (`printf`)
+- [ ] Float literals
+- [ ] Arrays and slices
+- [ ] Modules/imports
 - [ ] Pattern matching
-- [ ] Closures and higher-order functions
-- [ ] Compile-time computation
+- [ ] Generics and parametric polymorphism  
+- [ ] Closures and higher‑order functions
+- [ ] Compile‑time computation
 - [ ] Concurrency primitives
 
 ### Implementation Status
-- ✅ **Complete**: Basic expressions, variables, control flow, type operations, functions, simple classes
-- 🚧 **Partial**: Complex class inheritance, method calls (parsing complete, codegen has specific issues) 
-- 📋 **Planned**: Advanced features listed above
+- ✅ Complete: Basic expressions, variables, control flow, type ops, functions, and classes (incl. constructors, method calls, inheritance)
+- 🚧 Partial: Visibility enforcement, float literals
+- 📋 Planned: Items listed above
 
 ## Contact
 

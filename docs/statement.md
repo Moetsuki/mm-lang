@@ -8,40 +8,20 @@ The statement module (`statement.rs`) defines the core statement types that repr
 
 ## Statement Types
 
-### Core Statement Enum
+### Core Statement Enum (current)
 
 ```rust
 #[derive(Debug, Clone)]
 pub enum Statement {
-    VariableDecl {
-        identifier: Variable,
-        value: Expression,
-    },
-    Assignment {
-        identifier: Expression,
-        value: Expression,
-    },
-    Call {
-        callee: Expression,
-        args: Vec<Expression>,
-    },
-    If {
-        condition: Expression,
-        then_block: Block,
-        else_block: Option<Block>,
-    },
-    Function {
-        name: String,
-        ret_type: Type,
-        params: Vec<Variable>,
-        body: Block,
-    },
-    Block {
-        body: Block,
-    },
-    Return {
-        value: Expression,
-    },
+    VariableDecl { identifier: Variable, value: Expression },
+    Assignment { identifier: Expression, value: Expression },
+    Call { callee: Expression, args: Vec<Expression> },
+    If { condition: Expression, then_block: Block, else_block: Option<Block> },
+    Function { name: String, ret_type: Type, params: Vec<Variable>, body: Block },
+    Block { body: Block },
+    Return { value: Expression },
+    Class { name: String, parent: Option<String>, fields: Vec<(Variable, Visibility)>, methods: Vec<(Box<Statement>, Visibility)> },
+    Struct { id: u64, name: String, parent: Option<Box<Statement>>, fields: Vec<Variable> },
 }
 ```
 
@@ -100,10 +80,7 @@ process_data(input, config);
 
 **Structure:**
 ```rust
-Call {
-    callee: Expression,      // Function to call (usually Variable)
-    args: Vec<Expression>,   // Argument list
-}
+Call { callee: Expression, args: Vec<Expression> }
 ```
 
 **Characteristics:**
@@ -155,12 +132,7 @@ function greet(name: string) -> none {
 
 **Structure:**
 ```rust
-Function {
-    name: String,            // Function name
-    ret_type: Type,         // Return type
-    params: Vec<Variable>,  // Parameter list
-    body: Block,           // Function body
-}
+Function { name: String, ret_type: Type, params: Vec<Variable>, body: Block }
 ```
 
 **Characteristics:**
@@ -206,9 +178,24 @@ function factorial(n: i64) -> i64 {
 
 **Structure:**
 ```rust
-Return {
-    value: Expression,  // Expression to return
+Return { value: Expression }
+```
+
+### 8. Class Declaration
+
+```mm
+class Point {
+    public x: i32;
+    public y: i32;
+
+    init(x: i32, y: i32) { self.x = x; self.y = y; }
+    public function get_x() -> i32 { return self.x; }
 }
+```
+
+**Structure:**
+```rust
+Class { name: String, parent: Option<String>, fields: Vec<(Variable, Visibility)>, methods: Vec<(Box<Statement>, Visibility)> }
 ```
 
 **Characteristics:**

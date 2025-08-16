@@ -10,6 +10,8 @@ The type system module (`types.rs`) defines the core type system for MM-Lang, pr
 
 ### Core Type Enum
 
+### Core Type Enum (current)
+
 ```rust
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -19,10 +21,13 @@ pub enum Type {
     F32, F64,
     String,
     NoneType,
-    Function(Vec<Type>, Box<Type>),
+    Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool },
     Array(Box<Type>),
-    UserType(String),
-    ToBeEvaluated,
+    Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Box<Type>, Visibility)>, methods: Vec<(Box<Type>, Visibility)> },
+    Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Box<Type>> },
+    UserType(String, Box<Type>),
+    Pointer(Box<Type>),
+    ToBeEvaluated(String),
 }
 ```
 
@@ -122,7 +127,7 @@ let calculator: function(i64, i64) -> i64 = add;
 
 **Structure:**
 ```rust
-Function(Vec<Type>, Box<Type>)
+Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool }
 //       parameters  return_type
 ```
 
@@ -145,29 +150,11 @@ let matrix: array<array<f64>> = [[1.0, 2.0], [3.0, 4.0]];
 Array(Box<Type>)
 //    element_type
 ```
+### User‑Defined/Composite Types
 
-**Characteristics:**
-- Homogeneous element types
-- Dynamic sizing
-- Nested arrays supported
-- Bounds checking (planned)
-
-### User-Defined Types
-
-```mm
-struct Person {
-    name: string,
-    age: i32,
-}
-
-let user: Person = Person {
-    name: "Alice",
-    age: 30,
-};
-```
-
-**Structure:**
-```rust
+- Class types carry parent linkage, field types with visibility, and method function types. Lowered to `%ClassName` with leading vtable pointer.
+- Struct types are available in the type system but not exercised in the current tests.
+- `UserType` and `Pointer<T>` are used internally in parsing/codegen.
 UserType(String)
 //       type_name
 ```
@@ -202,7 +189,7 @@ impl Display for Type {
     }
 }
 ```
-
+## LLVM Type Mapping (as generated)
 ### Type Parsing
 
 ```rust
@@ -214,7 +201,7 @@ impl FromStr for Type {
             "bool" => Ok(Type::Bool),
             "i8" => Ok(Type::I8),
             "i16" => Ok(Type::I16),
-            "i32" => Ok(Type::I32),
+    }
             "i64" => Ok(Type::I64),
             "u8" => Ok(Type::U8),
             "u16" => Ok(Type::U16),

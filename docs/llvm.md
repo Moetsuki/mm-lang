@@ -328,8 +328,8 @@ pub fn transform_block(&mut self, statements: &[Statement]) -> Evaluation {
                                 eval.prologue.instructions.extend(arg_eval.prologue.instructions);
                                 
                                 // Generate printf call (simplified)
-                                eval.prologue.push(format!("  call i32 @printf(i8* %{})", 
-                                    arg_eval.register.to_string()));
+                                eval.prologue.push(format!("  call i32 @printf(i8* %reg{})", 
+                                    arg_eval.register.id));
                             }
                         }
                         _ => panic!("Unsupported function: {}", func_var.name),
@@ -587,3 +587,11 @@ Full pipeline testing from source to LLVM IR to verify correctness.
 - **Scalability**: Handles large programs efficiently
 
 The LLVM backend provides a solid foundation for generating efficient machine code while maintaining clear code organization and extensibility for future enhancements.
+
+## Current implementation notes
+
+- The LLVM struct for classes stores a vtable pointer at index 0, followed by fields in declaration order; field access uses GEP with field_index + 1.
+- Dynamic dispatch is implemented via per-class read-only VTable globals. Method calls load the vtable from the object, index the function pointer, and call with `self` as the first parameter.
+- The backend injects C bindings in the prologue and the scope: `printf`, `scanf`, `malloc`, `free`.
+- Registers are typed; conversions are inserted automatically (sext/trunc/zext) for integer widening/narrowing and via casts for explicit `as` conversions.
+- Strings are emitted as private unnamed_addr constants and addressed with `getelementptr` to produce a `ptr` for interop.

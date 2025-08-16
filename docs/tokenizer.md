@@ -22,11 +22,11 @@ pub enum Token {
 }
 ```
 
-### Constants
+### Constants (as implemented)
 
-- **KEYWORDS**: `["if", "else", "while", "for", "function", "return"]`
-- **OPERATORS**: `["+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">="]`
-- **PUNCTUATION**: `["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->"]`
+- KEYWORDS: `["if","else","while","for","function","return","as","object","class","entity","component","system","static","dynamic","public","private","protected","init","destroy"]`
+- OPERATORS: `["+","-","*","/","%","=","==","!=","<",">","<=",">="]`
+- PUNCTUATION: `["(",")","{","}","[","]",";",",",".",":","->"]`
 
 ### LexicalToken Structure
 
@@ -71,7 +71,7 @@ Converts a raw string into the appropriate token type.
 2. Numbers (parseable as `i64`)
 3. Operators (matches OPERATORS array)
 4. Punctuation (matches PUNCTUATION array)
-5. Keywords (matches KEYWORDS array)
+5. Keywords (matches KEYWORDS array: includes `class`, `init`, visibility markers, and `as` for casts)
 6. Identifiers (everything else)
 
 ### `emit(token: &mut String, tokens: &mut Vec<LexicalToken>, line: usize, column: usize)`
