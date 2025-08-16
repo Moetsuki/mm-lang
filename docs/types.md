@@ -20,12 +20,12 @@ pub enum Type {
     U8, U16, U32, U64,
     F32, F64,
     String,
-    NoneType,
+    Void,
     Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool },
     Array(Box<Type>),
     Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Box<Type>, Visibility)>, methods: Vec<(Box<Type>, Visibility)> },
     Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Box<Type>> },
-    UserType(String, Box<Type>),
+    UserDefined(String, Box<Type>),
     Pointer(Box<Type>),
     ToBeEvaluated(String),
 }
@@ -97,7 +97,7 @@ let multiline: string = "Line 1\nLine 2";
 - Dynamic length
 - Heap-allocated
 
-### None Type
+### Void Type
 
 ```mm
 function log_message(msg: string) -> none {
@@ -154,8 +154,8 @@ Array(Box<Type>)
 
 - Class types carry parent linkage, field types with visibility, and method function types. Lowered to `%ClassName` with leading vtable pointer.
 - Struct types are available in the type system but not exercised in the current tests.
-- `UserType` and `Pointer<T>` are used internally in parsing/codegen.
-UserType(String)
+- `UserDefined` and `Pointer<T>` are used internally in parsing/codegen.
+UserDefined(String)
 //       type_name
 ```
 
@@ -182,7 +182,7 @@ impl Display for Type {
                 ret.to_string()
             ),
             Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
-            Type::UserType(name) => name.clone(),
+            Type::UserDefined(name) => name.clone(),
             // ... other types
         };
         write!(f, "{}", fmtstr)
@@ -210,7 +210,7 @@ impl FromStr for Type {
             "f32" => Ok(Type::F32),
             "f64" => Ok(Type::F64),
             "string" => Ok(Type::String),
-            "none" => Ok(Type::NoneType),
+            "none" => Ok(Type::Void),
             _ => Err(()),
         }
     }
@@ -378,7 +378,7 @@ impl Type {
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::String => "i8*".to_string(),  // Pointer to char array
-            Type::NoneType => "void".to_string(),
+            Type::Void => "void".to_string(),
             Type::Function(params, ret) => {
                 let param_types = params.iter()
                     .map(|t| t.to_llvm())
@@ -389,7 +389,7 @@ impl Type {
             Type::Array(elem_type) => {
                 format!("{}*", elem_type.to_llvm())  // Pointer to elements
             }
-            Type::UserType(_) => "i8*".to_string(),  // Generic pointer
+            Type::UserDefined(_) => "i8*".to_string(),  // Generic pointer
             Type::ToBeEvaluated => "i8*".to_string(), // Placeholder
         }
     }

@@ -1,4 +1,8 @@
-use std::{fmt::Display, str::FromStr, hash::{Hash, Hasher}};
+use std::{
+    fmt::Display,
+    hash::{Hash, Hasher},
+    str::FromStr,
+};
 
 use crate::statement::Visibility;
 
@@ -16,26 +20,26 @@ pub enum Type {
     F32,
     F64,
     String,
-    NoneType,
+    Void,
     Function {
         name: String,
-        args: Vec<Type>, 
+        args: Vec<Type>,
         ret_type: Box<Type>,
         is_variadic: bool,
     },
     Class {
         name: String,
         parent: Option<Box<Type>>,
-        fields: Vec<(Box<Type>, Visibility)>,
-        methods: Vec<(Box<Type>, Visibility)>,
+        fields: Vec<(Type, Visibility)>,
+        methods: Vec<(Type, Visibility)>,
     },
     Struct {
         name: String,
         parent: Option<Box<Type>>,
-        fields: Vec<Box<Type>>,
+        fields: Vec<Type>,
     },
     Array(Box<Type>),
-    UserType(String, Box<Type>),
+    UserDefined(String, Box<Type>),
     Pointer(Box<Type>),
     ToBeEvaluated(String),
 }
@@ -72,8 +76,13 @@ impl Display for Type {
             Type::F32 => "f32".to_string(),
             Type::F64 => "f64".to_string(),
             Type::String => "string".to_string(),
-            Type::NoneType => "none".to_string(),
-            Type::Function { name, args, ret_type, is_variadic } => {
+            Type::Void => "none".to_string(),
+            Type::Function {
+                name,
+                args,
+                ret_type,
+                is_variadic,
+            } => {
                 let params_str = args
                     .iter()
                     .map(|t| t.to_string())
@@ -82,13 +91,15 @@ impl Display for Type {
                 let variadic_str = if *is_variadic { ", ..." } else { "" };
                 format!(
                     "function {}({}{}) -> {}",
-                    name,
-                    params_str,
-                    variadic_str,
-                    ret_type.to_string()
+                    name, params_str, variadic_str, ret_type
                 )
-            },
-            Type::Class { name, parent, fields, methods } => {
+            }
+            Type::Class {
+                name,
+                parent,
+                fields,
+                methods,
+            } => {
                 let parent_str = if let Some(p) = parent {
                     format!(" extends {}", p)
                 } else {
@@ -106,13 +117,14 @@ impl Display for Type {
                     .join(", ");
                 format!(
                     "class {}{} {{ fields: [{}], methods: [{}] }}",
-                    name, 
-                    parent_str,
-                    fields_str, 
-                    methods_str
+                    name, parent_str, fields_str, methods_str
                 )
-            },
-            Type::Struct { name, parent, fields } => {
+            }
+            Type::Struct {
+                name,
+                parent,
+                fields,
+            } => {
                 let parent_str = if let Some(p) = parent {
                     format!(" extends {}", p)
                 } else {
@@ -123,13 +135,16 @@ impl Display for Type {
                     .map(|field| field.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("struct {}{} {{ fields: [{}] }}", name, parent_str, fields_str)
-            },
-            Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
-            Type::Pointer(inner_type) => format!("ptr<{}>", inner_type.to_string()),
-            Type::UserType(name, typ) => {
-                format!("usertype {} <{}>", name, typ.to_string())
-            },
+                format!(
+                    "struct {}{} {{ fields: [{}] }}",
+                    name, parent_str, fields_str
+                )
+            }
+            Type::Array(elem_type) => format!("array<{}>", elem_type),
+            Type::Pointer(inner_type) => format!("ptr<{}>", inner_type),
+            Type::UserDefined(name, typ) => {
+                format!("UserDefined {} <{}>", name, typ)
+            }
             Type::ToBeEvaluated(tbe_str) => tbe_str.to_string(),
         };
         write!(f, "{}", fmtstr)
@@ -153,16 +168,16 @@ impl FromStr for Type {
             "f32" => Ok(Type::F32),
             "f64" => Ok(Type::F64),
             "string" => Ok(Type::String),
-            "none" => Ok(Type::NoneType),
+            "none" => Ok(Type::Void),
             _ => {
                 if s.starts_with("ptr<") && s.ends_with('>') {
                     let inner_type_str = &s[8..s.len() - 1];
                     let inner_type = Type::from_str(inner_type_str)?;
-                    return Ok(Type::Pointer(Box::new(inner_type)));
+                    Ok(Type::Pointer(Box::new(inner_type)))
                 } else {
                     Err(())
                 }
-            },
+            }
         }
     }
 }
@@ -182,12 +197,17 @@ impl Hash for Type {
             Type::F32 => "f32".hash(state),
             Type::F64 => "f64".hash(state),
             Type::String => "string".hash(state),
-            Type::NoneType => "none".hash(state),
+            Type::Void => "none".hash(state),
             Type::Function { args, ret_type, .. } => {
                 args.hash(state);
                 ret_type.hash(state);
             }
-            Type::Class { name, parent, fields, methods } => {
+            Type::Class {
+                name,
+                parent,
+                fields,
+                methods,
+            } => {
                 name.hash(state);
                 if let Some(p) = parent {
                     p.hash(state);
@@ -195,7 +215,11 @@ impl Hash for Type {
                 fields.hash(state);
                 methods.hash(state);
             }
-            Type::Struct { name, parent, fields } => {
+            Type::Struct {
+                name,
+                parent,
+                fields,
+            } => {
                 name.hash(state);
                 if let Some(p) = parent {
                     p.hash(state);
@@ -208,7 +232,7 @@ impl Hash for Type {
                 inner_type.hash(state);
                 ">".hash(state);
             }
-            Type::UserType(name, typ) => {
+            Type::UserDefined(name, typ) => {
                 name.hash(state);
                 typ.hash(state);
             }

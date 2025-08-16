@@ -400,7 +400,7 @@ fn type_to_llvm(&self, t: &Type) -> String {
         Type::F32 => "float".to_string(),
         Type::F64 => "double".to_string(),
         Type::String => "i8*".to_string(),
-        Type::NoneType => "void".to_string(),
+        Type::Void => "void".to_string(),
         Type::Function(params, ret) => {
             let param_types = params.iter()
                 .map(|t| self.type_to_llvm(t))
@@ -409,7 +409,7 @@ fn type_to_llvm(&self, t: &Type) -> String {
             format!("{} ({})*", self.type_to_llvm(ret), param_types)
         }
         Type::Array(elem_type) => format!("{}*", self.type_to_llvm(elem_type)),
-        Type::UserType(_) => "i8*".to_string(),
+        Type::UserDefined(_) => "i8*".to_string(),
         Type::ToBeEvaluated => "i8*".to_string(),
     }
 }

@@ -233,7 +233,7 @@ impl Register {
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::String => "ptr".to_string(),
-            Type::NoneType => "void".to_string(),
+            Type::Void => "void".to_string(),
             Type::Pointer(..) => "ptr".to_string(),
             _ => panic!("Unsupported type {} for LLVM register", self.var_type),
         }
@@ -450,7 +450,7 @@ impl LLVM {
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::String => "ptr".to_string(),
-            Type::NoneType => "void".to_string(),
+            Type::Void => "void".to_string(),
             Type::Pointer(_) => "ptr".to_string(),
             _ => panic!("Unsupported type {} for LLVM IR", t),
         }
@@ -848,9 +848,9 @@ impl LLVM {
                         ));
                     }
 
-                    // If return type is not NoneType
+                    // If return type is not Void
                     // Make sure the first level of statements have a return statement
-                    if ret_type != &Type::NoneType
+                    if ret_type != &Type::Void
                         && !body
                             .statements
                             .iter()
@@ -2266,7 +2266,7 @@ impl LLVM {
                             .collect::<Vec<_>>()
                             .join(", ");
 
-                        if **expected_ret_type == Type::NoneType {
+                        if **expected_ret_type == Type::Void {
                             // if is_constructor {
                             //     let class_type = self.get_class_type(&class.as_ref().unwrap().name);
                             //     eval.register = Register::new_var(
@@ -2274,7 +2274,7 @@ impl LLVM {
                             //         class.as_ref().unwrap().name.clone().to_lowercase()
                             //     );
                             // } else {
-                            //     eval.register = Register::new(Type::NoneType);
+                            //     eval.register = Register::new(Type::Void);
                             // }
                             eval.code.push(format!(
                                 "call {} @{}({})",
@@ -2522,13 +2522,13 @@ impl LLVM {
         );
         self.prologue.push("declare void @free(ptr)  ;".to_string());
         self.scope.insert_top(
-            Register::new(Type::NoneType),
+            Register::new(Type::Void),
             Variable {
                 name: "free".to_string(),
                 var_type: Type::Function {
                     name: "free".to_string(),
                     args: vec![Type::Pointer(Box::new(Type::I8))],
-                    ret_type: Box::new(Type::NoneType),
+                    ret_type: Box::new(Type::Void),
                     is_variadic: false,
                 },
             },
@@ -2560,7 +2560,7 @@ impl LLVM {
                 // Extract field types and names
                 let field_types = fields
                     .iter()
-                    .map(|(var, visibility)| (Box::new(var.var_type.clone()), *visibility))
+                    .map(|(var, visibility)| (var.var_type.clone(), *visibility))
                     .collect();
 
                 // Extract method types and visibilities
@@ -2580,7 +2580,7 @@ impl LLVM {
                                 ret_type: Box::new(ret_type.clone()),
                                 is_variadic: false,
                             };
-                            (Box::new(method_type), *visibility)
+                            (method_type, *visibility)
                         } else {
                             panic!("Expected method to be a function in class '{}'", class_name);
                         }

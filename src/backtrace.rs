@@ -17,7 +17,7 @@ pub fn get_immediate_caller() -> CallerInfo {
 
     for i in (0..lines_count).step_by(2) {
         // let fn_name = String::from(lines[i].clone());
-        let file_info = String::from(lines[i + 1].clone());
+        let file_info = lines[i + 1].clone();
 
         // println!("Function:{}", fn_name);
         // println!("File Info:{}", file_info);

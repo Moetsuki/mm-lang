@@ -90,7 +90,7 @@ fn process(
     if print_asm {
         // Compile LLVM IR via stdin
         let mut clang = Command::new("clang")
-            .args(&["-x", "ir", "-", "-S", "-g", "-O0", "-o", &asmfile])
+            .args(["-x", "ir", "-", "-S", "-g", "-O0", "-o", &asmfile])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -124,7 +124,7 @@ fn process(
     {
         // Compile LLVM IR via stdin
         let mut clang = Command::new("clang")
-            .args(&["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
+            .args(["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

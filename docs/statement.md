@@ -402,7 +402,7 @@ fn test_assignment_display() {
 fn test_function_definition() {
     let stmt = Statement::Function {
         name: "test".to_string(),
-        ret_type: Type::NoneType,
+        ret_type: Type::Void,
         params: vec![],
         body: Block::new(vec![]),
     };

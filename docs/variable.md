@@ -80,7 +80,7 @@ let message: string = "hello";  // String
 ```mm
 let items: array<i64> = [1, 2, 3];           // Array type
 let callback: function(i64) -> bool = check;  // Function type
-let custom: UserType = UserType::new();       // User-defined type
+let custom: UserDefined = UserDefined::new();       // User-defined type
 ```
 
 ### Type Safety

@@ -65,13 +65,13 @@ impl Ast {
     }
 
     pub fn expect_operator(&mut self) {
-        if let Some(lexical_token) = self.next_token() {
-            if !OPERATORS.contains(&lexical_token.token.to_string().as_str()) {
-                panic!(
-                    "Expected an operator, found {:?} at line {}, column {}",
-                    lexical_token.token, lexical_token.line, lexical_token.column
-                );
-            }
+        if let Some(lexical_token) = self.next_token()
+            && !OPERATORS.contains(&lexical_token.token.to_string().as_str())
+        {
+            panic!(
+                "Expected an operator, found {:?} at line {}, column {}",
+                lexical_token.token, lexical_token.line, lexical_token.column
+            );
         }
     }
 
@@ -347,8 +347,8 @@ impl Ast {
                                 methods.insert(
                                     // Insert it at index 0 if we have only a destructor
                                     // The default constructor will be pushed in front of it anyway later.
-                                    if methods.is_empty() { 0 } else { 1 }, 
-                                    (Box::new(method), Visibility::Public)
+                                    if methods.is_empty() { 0 } else { 1 },
+                                    (Box::new(method), Visibility::Public),
                                 );
                             }
                             Token::Newline => {
@@ -364,28 +364,34 @@ impl Ast {
 
                     // If no constructor is defined, we define a default one
                     if !constructor_defined {
-                        methods.insert(0, (
-                            Box::new(Statement::Function {
-                                name: format!("__{}_init", class_name),
-                                ret_type: Type::NoneType,
-                                params: Vec::new(),
-                                body: Block::new(Vec::new()),
-                            }),
-                            Visibility::Public,
-                        ));
+                        methods.insert(
+                            0,
+                            (
+                                Box::new(Statement::Function {
+                                    name: format!("__{}_init", class_name),
+                                    ret_type: Type::Void,
+                                    params: Vec::new(),
+                                    body: Block::new(Vec::new()),
+                                }),
+                                Visibility::Public,
+                            ),
+                        );
                     }
 
                     // If no destructor is defined, we define a default one
                     if !destructor_defined {
-                        methods.insert(1, (
-                            Box::new(Statement::Function {
-                                name: format!("__{}_destroy", class_name),
-                                ret_type: Type::NoneType,
-                                params: Vec::new(),
-                                body: Block::new(Vec::new()),
-                            }),
-                            Visibility::Public,
-                        ));
+                        methods.insert(
+                            1,
+                            (
+                                Box::new(Statement::Function {
+                                    name: format!("__{}_destroy", class_name),
+                                    ret_type: Type::Void,
+                                    params: Vec::new(),
+                                    body: Block::new(Vec::new()),
+                                }),
+                                Visibility::Public,
+                            ),
+                        );
                     }
 
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
@@ -445,12 +451,12 @@ impl Ast {
     fn parse_type(&mut self) -> Type {
         if let Some(lexical_token) = self.next_token() {
             match &lexical_token.token {
-                Token::Identifier(type_name) => {
-                    Type::from_str(type_name).expect(&format!(
+                Token::Identifier(type_name) => Type::from_str(type_name).unwrap_or_else(|_| {
+                    panic!(
                         "Unknown type `{}` at line {}, column {}",
                         type_name, lexical_token.line, lexical_token.column
-                    ))
-                }
+                    )
+                }),
                 _ => panic!(
                     "Expected a type identifier, found {:?} at line {}, column {}",
                     lexical_token.token, lexical_token.line, lexical_token.column
@@ -737,10 +743,10 @@ impl Ast {
                 self.next_token(); // consume '->'
                 ret_type = self.parse_type();
             } else {
-                ret_type = Type::NoneType;
+                ret_type = Type::Void;
             }
         } else {
-            ret_type = Type::NoneType;
+            ret_type = Type::Void;
         }
         self.expect(&Token::Punctuation("{".to_string()));
         let body = self.parse();
@@ -786,12 +792,11 @@ impl Ast {
         // Check if the next token is a parenthesis, which means we have parameters
         if let Some(next_token) = self.peek_token()
             && is_constructor
+            && next_token.token == Token::Punctuation("(".to_string())
         {
-            if next_token.token == Token::Punctuation("(".to_string()) {
-                self.next_token(); // consume '('
-                params = self.parse_function_call_params();
-                self.expect(&Token::Punctuation(")".to_string())); // consume ')'
-            }
+            self.next_token(); // consume '('
+            params = self.parse_function_call_params();
+            self.expect(&Token::Punctuation(")".to_string())); // consume ')'
         }
 
         self.expect(&Token::Punctuation("{".to_string()));
@@ -800,7 +805,7 @@ impl Ast {
 
         Statement::Function {
             name,
-            ret_type: Type::NoneType, // Constructors and destructors do not return a value
+            ret_type: Type::Void, // Constructors and destructors do not return a value
             params,
             body,
         }
@@ -808,23 +813,19 @@ impl Ast {
 
     fn parse_function_call_params(&mut self) -> Vec<Variable> {
         let mut params = Vec::new();
-        loop {
-            if let Some(lexical_token) = self.peek_token() {
-                if let Token::Identifier(param_name) = &lexical_token.token {
-                    let param_name = param_name.clone(); // Clone the name
-                    self.next_token(); // consume the identifier
-                    self.expect(&Token::Punctuation(":".to_string()));
-                    let param_type = self.parse_type();
-                    params.push(Variable {
-                        name: param_name,
-                        var_type: param_type,
-                    });
-                    if let Some(next_token) = self.peek_token() {
-                        if next_token.token == Token::Punctuation(",".to_string()) {
-                            self.next_token(); // consume ','
-                        } else {
-                            break;
-                        }
+        while let Some(lexical_token) = self.peek_token() {
+            if let Token::Identifier(param_name) = &lexical_token.token {
+                let param_name = param_name.clone(); // Clone the name
+                self.next_token(); // consume the identifier
+                self.expect(&Token::Punctuation(":".to_string()));
+                let param_type = self.parse_type();
+                params.push(Variable {
+                    name: param_name,
+                    var_type: param_type,
+                });
+                if let Some(next_token) = self.peek_token() {
+                    if next_token.token == Token::Punctuation(",".to_string()) {
+                        self.next_token(); // consume ','
                     } else {
                         break;
                     }

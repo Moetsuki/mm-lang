@@ -152,7 +152,7 @@ Parses type annotations used in function parameters and return types.
 **Supported types:**
 - Built-in types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`
 - User-defined types: Custom type names
-- Generic handling: Falls back to `UserType` for unknown types
+- Generic handling: Falls back to `UserDefined` for unknown types
 
 ## Error Handling
 

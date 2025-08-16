@@ -103,7 +103,7 @@ impl Display for Statement {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let methods_str = methods.iter()
-                    .map(|method| format!("{} ({:?})", method.0.to_string(), method.1))
+                    .map(|method| format!("{} ({:?})", method.0, method.1))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("Class(name: {}, parent: {:?}, fields: [{}], methods: [{}])", name, parent, fields_str, methods_str)

@@ -168,7 +168,7 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
                         let last = tokens.last().unwrap();
 
                         let last_str =
-                            format!("{}{}", last_last.token.to_string(), last.token.to_string());
+                            format!("{}{}", last_last.token, last.token);
 
                         if OPERATORS.contains(&last_str.as_str())
                             || PUNCTUATION.contains(&last_str.as_str())
@@ -220,11 +220,11 @@ pub fn tokenize(source: &str) -> Vec<LexicalToken> {
     let lines: Vec<&str> = source.lines().collect();
 
     // Step 2: Tokenize each line
-    let tokens = lines
+    
+
+    lines
         .iter()
         .enumerate()
         .flat_map(|(line, line_str)| tokenize_line(line_str, line))
-        .collect();
-
-    tokens
+        .collect()
 }
