@@ -1,13 +1,16 @@
+#![allow(clippy::format_in_format_args)]
+
 use core::panic;
 
-use crate::block::Block;
 use crate::backtrace;
+use crate::block::Block;
 use crate::statement::Visibility;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
 use std::collections::HashMap;
-
+use std::fmt;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 ///
@@ -78,11 +81,11 @@ impl Scope {
                 result = Some((r.0.clone(), r.1.clone()));
             }
 
-            result.as_ref().map(|_| {
-                if let Some((k, _v)) = scope.symbols.iter().find(|s| s.1.name == name) {
-                    scope.symbols.remove(&k.clone());
-                }
-            });
+            if result.as_ref().is_some()
+                && let Some((k, _v)) = scope.symbols.iter().find(|s| s.1.name == name)
+            {
+                scope.symbols.remove(&k.clone());
+            };
         });
 
         result
@@ -115,10 +118,10 @@ impl Scope {
         // Search only in the global scope (first element of stack)
         if let Some(global_scope) = self.stack.first() {
             for var in global_scope.symbols.values() {
-                if var.name == name {
-                    if let Type::Function { .. } = var.var_type {
-                        return Some(var);
-                    }
+                if var.name == name
+                    && let Type::Function { .. } = var.var_type
+                {
+                    return Some(var);
                 }
             }
         }
@@ -156,9 +159,9 @@ impl IR {
     }
 }
 
-impl ToString for IR {
-    fn to_string(&self) -> String {
-        self.instructions.join("\n")
+impl Display for IR {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instructions.join("\n"))
     }
 }
 
@@ -167,8 +170,7 @@ impl ToString for IR {
 ///
 #[derive(Debug, Clone)]
 pub struct Evaluation {
-    pub prologue: IR,
-    pub epilogue: IR,
+    pub code: IR,
     pub register: Register,
     pub current_class_context: Option<Class>,
     pub current_struct_context: Option<Struct>,
@@ -194,7 +196,8 @@ impl Register {
         let caller = backtrace::get_immediate_caller();
         println!(
             "{:<30} Register::new({})",
-            format!("{}:{}:{}", caller.file, caller.line, caller.column), id
+            format!("{}:{}:{}", caller.file, caller.line, caller.column),
+            id
         );
         Register {
             id,
@@ -209,7 +212,9 @@ impl Register {
         let caller = backtrace::get_immediate_caller();
         println!(
             "{:<30} Register::new_var({}_{})",
-            format!("{}:{}:{}",caller.file, caller.line, caller.column), name, id
+            format!("{}:{}:{}", caller.file, caller.line, caller.column),
+            name,
+            id
         );
         Register { id, var_type, name }
     }
@@ -235,12 +240,12 @@ impl Register {
     }
 }
 
-impl ToString for Register {
-    fn to_string(&self) -> String {
+impl Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.name.is_empty() {
-            format!("reg{}", self.id)
+            write!(f, "reg{}", self.id)
         } else {
-            format!("{}_{}", self.name, self.id)
+            write!(f, "{}_{}", self.name, self.id)
         }
     }
 }
@@ -325,7 +330,13 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new(name: String, owner: Option<Class>, statement: Statement, args: Vec<Variable>, ret_type: Type) -> Self {
+    pub fn new(
+        name: String,
+        owner: Option<Class>,
+        statement: Statement,
+        args: Vec<Variable>,
+        ret_type: Type,
+    ) -> Self {
         let id = FUNCTION_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         Function {
             id,
@@ -378,15 +389,16 @@ impl StringData {
     }
 }
 
-impl ToString for StringData {
-    fn to_string(&self) -> String {
-        format!("str{} = \"{}\"", self.id, self.value)
+impl Display for StringData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "str{} = \"{}\"", self.id, self.value)
     }
 }
 
 ///
 /// LLVM
 ///
+#[allow(clippy::upper_case_acronyms)]
 pub struct LLVM {
     forward_decls: IR,
     prologue: IR,
@@ -420,7 +432,7 @@ impl LLVM {
             struct_definitions: HashMap::new(),
             current_class_scope: None,
             current_struct_scope: None,
-            current_func_scope: None
+            current_func_scope: None,
         }
     }
 
@@ -460,9 +472,9 @@ impl LLVM {
 
     #[track_caller]
     pub fn compile(&mut self) {
-        self.prologue.push(format!("\n; PROLOGUE"));
+        self.prologue.push("\n; PROLOGUE".to_string());
         self.prologue
-            .push(format!("; LLVM IR generated from MM-lang\n"));
+            .push("; LLVM IR generated from MM-lang\n".to_string());
 
         self.scope.enter_scope(); // Enter binding scope
 
@@ -470,19 +482,18 @@ impl LLVM {
 
         self.generate_c_bindings();
 
-        self.main_prologue.push(format!("\n; MAIN PROLOGUE"));
+        self.main_prologue.push("\n; MAIN PROLOGUE".to_string());
         //self.main_prologue.push(format!("@main = global i32 0"));
-        self.main_prologue.push(format!("define i32 @main() {{"));
-        self.main_prologue.push(format!("entry:\n"));
+        self.main_prologue.push("define i32 @main() {".to_string());
+        self.main_prologue.push("entry:\n".to_string());
 
         let eval = self.transform();
 
-        self.main.instructions.extend(eval.prologue.instructions);
-        self.main.instructions.extend(eval.epilogue.instructions);
+        self.main.instructions.extend(eval.code.instructions);
 
-        self.main_epilogue.push(format!("\n; MAIN EPILOGUE"));
-        self.main_epilogue.push(format!("  ret i32 0"));
-        self.main_epilogue.push(format!("}}"));
+        self.main_epilogue.push("\n; MAIN EPILOGUE".to_string());
+        self.main_epilogue.push("  ret i32 0".to_string());
+        self.main_epilogue.push("}".to_string());
 
         self.scope.exit_scope(); // Exit binding scope
     }
@@ -508,8 +519,7 @@ impl LLVM {
     #[track_caller]
     pub fn transform_block(&mut self, statements: &[Statement]) -> Option<Evaluation> {
         let mut eval = Evaluation {
-            prologue: IR::new(),
-            epilogue: IR::new(),
+            code: IR::new(),
             register: Register::new(Type::ToBeEvaluated("invalid_reg".to_string())),
             current_class_context: None,
             current_struct_context: None,
@@ -523,22 +533,18 @@ impl LLVM {
                 Statement::Block { body } => {
                     let result = self.transform_block(&body.statements);
 
-                    result.map(|r| {
-                        eval.prologue.instructions.extend(r.prologue.instructions);
-                        eval.epilogue.instructions.extend(r.epilogue.instructions);
-                    });
+                    if let Some(r) = result {
+                        eval.code.instructions.extend(r.code.instructions);
+                    }
                 }
                 Statement::VariableDecl {
                     identifier: var_info,
                     value,
                 } => {
                     let value_eval = self.transform_expression(value.clone());
-                    eval.prologue
+                    eval.code
                         .instructions
-                        .extend(value_eval.prologue.instructions.clone());
-                    eval.epilogue
-                        .instructions
-                        .extend(value_eval.epilogue.instructions.clone());
+                        .extend(value_eval.code.instructions.clone());
 
                     // println!("{{Statement::VariableDecl}}\n");
                     // println!("{:?}", statement.clone());
@@ -562,7 +568,7 @@ impl LLVM {
                         match &var_info.var_type {
                             Type::ToBeEvaluated(..) => value_eval.register.clone(),
                             _ => self.insert_type_conversion(
-                                &mut eval.epilogue,
+                                &mut eval.code,
                                 &value_eval.register,
                                 &var_info.var_type,
                             ),
@@ -595,20 +601,14 @@ impl LLVM {
                 } => match lhs {
                     Expression::Variable(_var_info) => {
                         let rhs_eval = self.transform_expression(rhs.clone());
-                        eval.prologue
+                        eval.code
                             .instructions
-                            .extend(rhs_eval.prologue.instructions.clone());
-                        eval.epilogue
-                            .instructions
-                            .extend(rhs_eval.epilogue.instructions.clone());
+                            .extend(rhs_eval.code.instructions.clone());
 
                         let lhs_eval = self.transform_expression(lhs.clone());
-                        eval.prologue
+                        eval.code
                             .instructions
-                            .extend(lhs_eval.prologue.instructions.clone());
-                        eval.epilogue
-                            .instructions
-                            .extend(lhs_eval.epilogue.instructions.clone());
+                            .extend(lhs_eval.code.instructions.clone());
 
                         println!("lhs = {:?}", lhs);
                         println!("rhs = {:?}", rhs);
@@ -619,7 +619,7 @@ impl LLVM {
                         let coerced_register =
                             if rhs_eval.register.var_type != lhs_eval.register.var_type {
                                 self.insert_type_conversion(
-                                    &mut eval.epilogue,
+                                    &mut eval.code,
                                     &rhs_eval.register,
                                     &lhs_eval.register.var_type,
                                 )
@@ -629,11 +629,11 @@ impl LLVM {
 
                         let result_register = Register::new(coerced_register.var_type.clone());
 
-                        eval.prologue.instructions.push(format!(
+                        eval.code.instructions.push(format!(
                             "%{} = add {} 0, %{}",
-                            result_register.to_string(),
+                            result_register,
                             self.type_to_llvm(&lhs_eval.register.var_type),
-                            coerced_register.to_string(),
+                            coerced_register,
                         ));
 
                         eval.register = lhs_eval.register.clone();
@@ -642,11 +642,11 @@ impl LLVM {
                         // one that holds the result
                         let mut res = self.scope.pop_by_name(&_var_info.name);
 
-                        res.as_mut().map(|r| {
+                        if let Some(r) = res.as_mut() {
                             r.0 = result_register.clone();
 
                             self.scope.insert(r.0.clone(), r.1.clone());
-                        });
+                        }
 
                         if res.is_none() {
                             self.scope.insert(result_register, _var_info.clone());
@@ -657,12 +657,9 @@ impl LLVM {
 
                         // Ensure the object is a pointer type
                         if let Type::Pointer(inner_type) = object_eval.register.clone().var_type {
-                            eval.prologue
+                            eval.code
                                 .instructions
-                                .extend(object_eval.prologue.instructions);
-                            eval.epilogue
-                                .instructions
-                                .extend(object_eval.epilogue.instructions);
+                                .extend(object_eval.code.instructions);
 
                             // Get the class or struct name from the inner type
                             let object_name = if let Type::Class { name, .. } = *inner_type {
@@ -697,28 +694,27 @@ impl LLVM {
                                         field, object_name
                                     );
                                 }
-                                .expect(&format!(
-                                    "Field '{}' not found in object type '{}'",
-                                    field, object_name
-                                ));
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "Field '{}' not found in object type '{}'",
+                                        field, object_name
+                                    )
+                                });
 
                             // Create a new register for the field
                             let field_register = Register::new(field_var.var_type.clone());
 
                             // Calculate rhs of the assignment
                             let rhs_eval = self.transform_expression(rhs.clone());
-                            eval.prologue
+                            eval.code
                                 .instructions
-                                .extend(rhs_eval.prologue.instructions);
-                            eval.epilogue
-                                .instructions
-                                .extend(rhs_eval.epilogue.instructions);
+                                .extend(rhs_eval.code.instructions);
 
                             // Handle type coercion if needed
                             let coerced_register =
                                 if rhs_eval.register.var_type != field_var.var_type {
                                     self.insert_type_conversion(
-                                        &mut eval.epilogue,
+                                        &mut eval.code,
                                         &rhs_eval.register,
                                         &field_var.var_type,
                                     )
@@ -727,19 +723,19 @@ impl LLVM {
                                 };
 
                             // Generate LLVM IR for the assignment
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "%{} = getelementptr inbounds %{}, ptr %{}, i64 0, i32 {}",
-                                field_register.to_string(),
+                                field_register,
                                 object_name,
-                                object_eval.register.to_string(),
+                                object_eval.register,
                                 field_index + 1 // +1 because the first element is the vtable pointer
                             ));
 
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "store {} %{}, ptr %{}",
                                 self.type_to_llvm(&coerced_register.var_type),
-                                coerced_register.to_string(),
-                                field_register.to_string()
+                                coerced_register,
+                                field_register
                             ));
 
                             eval.register = coerced_register;
@@ -760,12 +756,9 @@ impl LLVM {
                     else_block,
                 } => {
                     let condition_eval = self.transform_expression(condition.clone());
-                    eval.prologue
+                    eval.code
                         .instructions
-                        .extend(condition_eval.prologue.instructions);
-                    eval.epilogue
-                        .instructions
-                        .extend(condition_eval.epilogue.instructions);
+                        .extend(condition_eval.code.instructions);
 
                     // Create labels
                     let true_label = format!("if_true_{}", eval.register.id);
@@ -774,16 +767,15 @@ impl LLVM {
 
                     // Compare condition with zero
                     let cmp_register = Register::new(Type::Bool);
-                    eval.epilogue.push(format!(
+                    eval.code.push(format!(
                         "%{} = icmp ne i1 %{}, 0",
-                        cmp_register.to_string(),
-                        condition_eval.register.to_string()
+                        cmp_register, condition_eval.register
                     ));
 
                     // Branch based on comparison
-                    eval.epilogue.push(format!(
+                    eval.code.push(format!(
                         "br i1 %{}, label %{}, label %{}",
-                        cmp_register.to_string(),
+                        cmp_register,
                         true_label,
                         if else_block.is_some() {
                             &false_label
@@ -793,35 +785,29 @@ impl LLVM {
                     ));
 
                     // True block
-                    eval.epilogue.push(format!("{}:", true_label));
+                    eval.code.push(format!("{}:", true_label));
                     let then_eval = self
                         .transform_block(&then_block.statements)
                         .expect("Failed to compile true-statements block");
-                    eval.epilogue
+                    eval.code
                         .instructions
-                        .extend(then_eval.prologue.instructions);
-                    eval.epilogue
-                        .instructions
-                        .extend(then_eval.epilogue.instructions);
-                    eval.epilogue.push(format!("br label %{}", done_label));
+                        .extend(then_eval.code.instructions);
+                    eval.code.push(format!("br label %{}", done_label));
 
                     // False block (if exists)
                     if let Some(else_block) = else_block {
-                        eval.epilogue.push(format!("{}:", false_label));
+                        eval.code.push(format!("{}:", false_label));
                         let else_eval = self
                             .transform_block(&else_block.statements)
                             .expect("Failed to compile false-statements block");
-                        eval.epilogue
+                        eval.code
                             .instructions
-                            .extend(else_eval.prologue.instructions);
-                        eval.epilogue
-                            .instructions
-                            .extend(else_eval.epilogue.instructions);
-                        eval.epilogue.push(format!("br label %{}", done_label));
+                            .extend(else_eval.code.instructions);
+                        eval.code.push(format!("br label %{}", done_label));
                     }
 
                     // Done label
-                    eval.epilogue.push(format!("{}:", done_label));
+                    eval.code.push(format!("{}:", done_label));
                 }
                 Statement::Function {
                     name,
@@ -843,7 +829,7 @@ impl LLVM {
                         "\ndefine {} @{}({}) {{",
                         return_type_llvm, name, param_str
                     ));
-                    self.code.push(format!("entry:\n"));
+                    self.code.push("entry:\n".to_string());
 
                     // Set up function scope
                     self.scope.enter_scope();
@@ -856,7 +842,7 @@ impl LLVM {
                         self.scope.insert(param_register.clone(), param.clone());
                         self.code.push(format!(
                             "%{} = add {} 0, %{}",
-                            param_register.to_string(),
+                            param_register,
                             self.type_to_llvm(&param.var_type),
                             param.name
                         ));
@@ -864,13 +850,13 @@ impl LLVM {
 
                     // If return type is not NoneType
                     // Make sure the first level of statements have a return statement
-                    if ret_type != &Type::NoneType {
-                        if !body.statements.iter().any(|s| match s {
-                            Statement::Return { .. } => true,
-                            _ => false,
-                        }) {
-                            panic!("Function '{}' must have a return statement", name);
-                        }
+                    if ret_type != &Type::NoneType
+                        && !body
+                            .statements
+                            .iter()
+                            .any(|s| matches!(s, Statement::Return { .. }))
+                    {
+                        panic!("Function '{}' must have a return statement", name);
                     }
 
                     // Set function to current context
@@ -884,7 +870,7 @@ impl LLVM {
                             body: body.clone(),
                         },
                         params.clone(),
-                        ret_type.clone()
+                        ret_type.clone(),
                     )));
 
                     // Transform function body
@@ -898,39 +884,36 @@ impl LLVM {
                     // We need to fix the last instruction.
                     if body_eval.register.var_type != *ret_type {
                         // Make sure the last instruction of the epilogue is a ret
-                        body_eval.epilogue.instructions.last().map(|last| {
-                            if !last.starts_with("ret") {
-                                panic!(
-                                    "Function '{}' return type mismatch: expected {}, got {}",
-                                    name, ret_type, body_eval.register.var_type
-                                );
-                            }
-                        });
+                        if let Some(last) = body_eval.code.instructions.last()
+                            && !last.starts_with("ret")
+                        {
+                            panic!(
+                                "Function '{}' return type mismatch: expected {}, got {}",
+                                name, ret_type, body_eval.register.var_type
+                            );
+                        };
                         // Remove the last instruction
-                        body_eval.epilogue.instructions.pop();
+                        body_eval.code.instructions.pop();
 
                         // Coerce the return value register to the expected return type in a new register
                         let coerced_register = self.insert_type_conversion(
-                            &mut body_eval.epilogue,
+                            &mut body_eval.code,
                             &body_eval.register,
-                            &ret_type,
+                            ret_type,
                         );
 
                         // Return the coerced register
-                        body_eval.epilogue.push(format!(
+                        body_eval.code.push(format!(
                             "ret {} %{}",
                             self.type_to_llvm(&coerced_register.var_type),
-                            coerced_register.to_string()
+                            coerced_register
                         ));
                     }
 
                     self.code
                         .instructions
-                        .extend(body_eval.prologue.instructions);
-                    self.code
-                        .instructions
-                        .extend(body_eval.epilogue.instructions);
-                    self.code.push(format!("}}"));
+                        .extend(body_eval.code.instructions);
+                    self.code.push("}".to_string());
 
                     self.scope.exit_scope();
 
@@ -945,26 +928,18 @@ impl LLVM {
                         },
                     };
                     let func_register = Register::new(ret_type.clone());
+                    eval.register = func_register.clone();
                     self.scope.insert_top(func_register.clone(), var_info);
-
-                    Evaluation {
-                        prologue: IR::new(),
-                        epilogue: IR::new(),
-                        register: func_register,
-                        current_class_context: None,
-                        current_struct_context: None,
-                        current_func_context: None,
-                    };
                 }
                 Statement::Call { callee, args } => {
                     match callee {
                         Expression::Variable(var_expr) => {
                             // existing function call logic
                             let func_name = var_expr.name.clone();
-                            let func_var = self.scope.find_function(&func_name).expect(&format!(
-                                "Function '{}' not found in global scope",
-                                func_name
-                            ));
+                            let func_var =
+                                self.scope.find_function(&func_name).unwrap_or_else(|| {
+                                    panic!("Function '{}' not found in global scope", func_name)
+                                });
                             let param_types =
                                 if let Type::Function { args, .. } = &func_var.var_type {
                                     args.clone()
@@ -980,12 +955,9 @@ impl LLVM {
                             let mut arg_evals = Vec::new();
                             for arg in args {
                                 let arg_eval = self.transform_expression(arg.clone());
-                                eval.prologue
+                                eval.code
                                     .instructions
-                                    .extend(arg_eval.prologue.instructions.clone());
-                                eval.prologue
-                                    .instructions
-                                    .extend(arg_eval.epilogue.instructions.clone());
+                                    .extend(arg_eval.code.instructions.clone());
                                 arg_evals.push(arg_eval);
                             }
                             let args_str = arg_evals
@@ -995,16 +967,14 @@ impl LLVM {
                                     format!(
                                         "{} %{}",
                                         self.type_to_llvm(param_type),
-                                        arg_eval.register.to_string()
+                                        arg_eval.register
                                     )
                                 })
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "%{} = call {}({})",
-                                eval.register.to_string(),
-                                signature,
-                                args_str
+                                eval.register, signature, args_str
                             ));
                         }
                         _ => {
@@ -1017,18 +987,18 @@ impl LLVM {
                 }
                 Statement::Return { value } => {
                     let return_eval = self.transform_expression(value.clone());
-                    eval.prologue
+                    eval.code
                         .instructions
-                        .extend(return_eval.prologue.instructions);
-                    eval.prologue
-                        .instructions
-                        .extend(return_eval.epilogue.instructions);
+                        .extend(return_eval.code.instructions);
 
                     // Get return type from current function context
-                    let expected_ret_type = self.current_func_scope
+                    let expected_ret_type = self
+                        .current_func_scope
                         .as_ref()
                         .map(|f| f.ret_type.clone())
-                        .unwrap_or_else(|| panic!("Return statement outside of a function context!"));
+                        .unwrap_or_else(|| {
+                            panic!("Return statement outside of a function context!")
+                        });
 
                     // println!("{{Statement::Return}}");
                     // println!("Inside Function Context");
@@ -1040,7 +1010,7 @@ impl LLVM {
                     if expected_ret_type != return_eval.register.var_type {
                         // Coerce the return value register to the expected return type in a new register
                         let coerced_register = self.insert_type_conversion(
-                            &mut eval.epilogue,
+                            &mut eval.code,
                             &return_eval.register,
                             &expected_ret_type,
                         );
@@ -1052,10 +1022,10 @@ impl LLVM {
                     }
 
                     // Add return statement
-                    eval.epilogue.push(format!(
+                    eval.code.push(format!(
                         "ret {} %{}",
                         eval.register.llvm_type(),
-                        eval.register.to_string()
+                        eval.register
                     ));
                 }
                 Statement::Class {
@@ -1215,10 +1185,7 @@ impl LLVM {
                     let destructor_name = format!("__{}_destroy", class_def.name());
                     let _constructor = methods
                         .iter()
-                        .find(|(m, _)| match m.as_ref() {
-                            Statement::Function { name, .. } if name == &constructor_name => true,
-                            _ => false,
-                        })
+                        .find(|(m, _)| matches!(m.as_ref(), Statement::Function { name, .. } if name == &constructor_name))
                         .map(|(m, _)| m.clone())
                         .unwrap_or_else(|| {
                             panic!(
@@ -1229,10 +1196,7 @@ impl LLVM {
                         });
                     let _destructor = methods
                         .iter()
-                        .find(|(m, _)| match m.as_ref() {
-                            Statement::Function { name, .. } if name == &destructor_name => true,
-                            _ => false,
-                        })
+                        .find(|(m, _)| matches!(m.as_ref(), Statement::Function { name, .. } if name == &destructor_name))
                         .map(|(m, _)| m.clone())
                         .unwrap_or_else(|| {
                             panic!(
@@ -1303,16 +1267,18 @@ impl LLVM {
                         } = method.0.as_ref()
                         {
                             // Generate function signature
-                            let return_type_llvm = self.type_to_llvm(&ret_type);
+                            let return_type_llvm = self.type_to_llvm(ret_type);
 
                             // Create a register for `self` (the class instance)
-                            let self_register =
-                                Register::new_var(Type::Pointer(Box::new(Type::Class {
+                            let self_register = Register::new_var(
+                                Type::Pointer(Box::new(Type::Class {
                                     name: class_def.name(),
                                     parent: None,
                                     fields: vec![],  // You can populate this if needed
                                     methods: vec![], // You can populate this if needed
-                                })), "self".to_string());
+                                })),
+                                "self".to_string(),
+                            );
 
                             //
                             // Generate function body <START>
@@ -1334,29 +1300,29 @@ impl LLVM {
                             // Add other parameters to the scope
                             let mut param_reg_pair = Vec::new();
                             for param in params {
-                                let param_register = Register::new_var(param.var_type.clone(), param.name.clone());
+                                let param_register =
+                                    Register::new_var(param.var_type.clone(), param.name.clone());
                                 self.scope.insert(param_register.clone(), param.clone());
                                 param_reg_pair.push((param_register, param));
                             }
-                            
+
                             // Set function to current context
-                            self.current_func_scope = Some(Box::new(
-                                Function::new(
-                                    name.clone(),                   // name
-                                    Some(class_def.clone()),        // owner
-                                    Statement::Function {           // statement
-                                        name: name.clone(),
-                                        params: params.clone(),
-                                        ret_type: ret_type.clone(),
-                                        body: body.clone(),
-                                    },
-                                    params.clone(),                 // args
-                                    ret_type.clone(),               // ret_type
-                                )
-                            ));
+                            self.current_func_scope = Some(Box::new(Function::new(
+                                name.clone(),            // name
+                                Some(class_def.clone()), // owner
+                                Statement::Function {
+                                    // statement
+                                    name: name.clone(),
+                                    params: params.clone(),
+                                    ret_type: ret_type.clone(),
+                                    body: body.clone(),
+                                },
+                                params.clone(),   // args
+                                ret_type.clone(), // ret_type
+                            )));
 
                             // Add `self` as the first parameter
-                            let mut param_str = format!("ptr %{}", self_register.to_string());
+                            let mut param_str = format!("ptr %{}", self_register);
                             if !params.is_empty() {
                                 let params_str = params
                                     .iter()
@@ -1365,16 +1331,14 @@ impl LLVM {
                                         let param_reg = &param_reg_pair
                                             .iter()
                                             .find(|(_, param)| param.name == p.name)
-                                            .expect(&format!(
-                                                "Parameter '{}' not found in method parameters",
-                                                p.name
-                                            ))
+                                            .unwrap_or_else(|| {
+                                                panic!(
+                                                    "Parameter '{}' not found in method parameters",
+                                                    p.name
+                                                )
+                                            })
                                             .0;
-                                        format!(
-                                            "{} %{}",
-                                            self.type_to_llvm(&p.var_type),
-                                            param_reg.to_string()
-                                        )
+                                        format!("{} %{}", self.type_to_llvm(&p.var_type), param_reg)
                                     })
                                     .collect::<Vec<_>>()
                                     .join(", ");
@@ -1394,8 +1358,9 @@ impl LLVM {
 
                             // Insert the function definition into the LLVM IR
                             self.prologue.push(format!(
-                                "{}define {} @__{}_{}({}) {{\nentry:",
-                                format!("; {}::{}\n", class_def.name, name),
+                                "; {}::{}\ndefine {} @__{}_{}({}) {{\nentry:",
+                                class_def.name,
+                                name,
                                 return_type_llvm,
                                 class_def.name,
                                 name,
@@ -1403,18 +1368,15 @@ impl LLVM {
                             ));
                             self.prologue
                                 .instructions
-                                .extend(body_llvm.clone().unwrap().prologue.instructions);
-                            self.prologue
-                                .instructions
-                                .extend(body_llvm.clone().unwrap().epilogue.instructions);
+                                .extend(body_llvm.clone().unwrap().code.instructions);
 
                             if name == &format!("__{}_init", class_def.name)
                                 || name == &format!("__{}_destroy", class_def.name)
                             {
-                                self.prologue.push(format!("  ret void"));
+                                self.prologue.push("  ret void".to_string());
                             }
 
-                            self.prologue.push(format!("}}"));
+                            self.prologue.push("}".to_string());
                         } else {
                             panic!("Expected function statement for class method");
                         }
@@ -1457,7 +1419,7 @@ impl LLVM {
                             .collect::<Vec<_>>()
                             .join("\n"),
                     );
-                    self.prologue.push(format!("}}"));
+                    self.prologue.push("}".to_string());
                 }
                 _ => {
                     panic!(
@@ -1476,8 +1438,7 @@ impl LLVM {
     #[track_caller]
     pub fn transform_expression(&mut self, expr: Expression) -> Evaluation {
         let mut eval = Evaluation {
-            prologue: IR::new(),
-            epilogue: IR::new(),
+            code: IR::new(),
             register: Register::new(Type::ToBeEvaluated("invalid_reg".to_string())),
             current_class_context: None,
             current_struct_context: None,
@@ -1486,11 +1447,8 @@ impl LLVM {
 
         match expr {
             Expression::Number(value) => {
-                eval.epilogue.push(format!(
-                    "%{} = add i64 0, {}",
-                    eval.register.to_string(),
-                    value
-                ));
+                eval.code
+                    .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
             }
             Expression::StringLiteral(value) => {
@@ -1506,9 +1464,9 @@ impl LLVM {
                         .replace("\"", "\\\"")
                 ));
 
-                eval.epilogue.push(format!(
+                eval.code.push(format!(
                     "%{} = getelementptr [{} x i8], ptr @.{}, i32 0, i32 0",
-                    eval.register.to_string(),
+                    eval.register,
                     string_data.length() + 1,
                     string_data.name()
                 ));
@@ -1519,7 +1477,7 @@ impl LLVM {
                 let var_symbol = self
                     .scope
                     .find_by_name(&var.name)
-                    .expect(format!("Variable {} not found in scope", var.name).as_str());
+                    .unwrap_or_else(|| panic!("Variable {} not found in scope", var.name));
 
                 eval.register = var_symbol.0.clone();
             }
@@ -1527,18 +1485,12 @@ impl LLVM {
                 let left_eval = self.transform_expression(*left);
                 let right_eval = self.transform_expression(*right);
 
-                eval.prologue
+                eval.code
                     .instructions
-                    .extend(left_eval.prologue.instructions);
-                eval.prologue
+                    .extend(left_eval.code.instructions);
+                eval.code
                     .instructions
-                    .extend(right_eval.prologue.instructions);
-                eval.epilogue
-                    .instructions
-                    .extend(left_eval.epilogue.instructions);
-                eval.epilogue
-                    .instructions
-                    .extend(right_eval.epilogue.instructions);
+                    .extend(right_eval.code.instructions);
 
                 // Determine the result type (promote to larger type)
                 let result_type = self.determine_binary_op_result_type(
@@ -1552,7 +1504,7 @@ impl LLVM {
                 // Convert operands to result type if needed
                 let left_converted = if left_eval.register.var_type != result_type {
                     self.insert_type_conversion(
-                        &mut eval.epilogue,
+                        &mut eval.code,
                         &left_eval.register,
                         &result_type,
                     )
@@ -1562,7 +1514,7 @@ impl LLVM {
 
                 let right_converted = if right_eval.register.var_type != result_type {
                     self.insert_type_conversion(
-                        &mut eval.epilogue,
+                        &mut eval.code,
                         &right_eval.register,
                         &result_type,
                     )
@@ -1574,30 +1526,21 @@ impl LLVM {
 
                 match op.as_str() {
                     "+" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = add {} %{}, %{}",
-                            eval.register.to_string(),
-                            result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            eval.register, result_llvm_type, left_converted, right_converted
                         ));
                     }
                     "-" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = sub {} %{}, %{}",
-                            eval.register.to_string(),
-                            result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            eval.register, result_llvm_type, left_converted, right_converted
                         ));
                     }
                     "*" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = mul {} %{}, %{}",
-                            eval.register.to_string(),
-                            result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            eval.register, result_llvm_type, left_converted, right_converted
                         ));
                     }
                     "/" => {
@@ -1611,69 +1554,69 @@ impl LLVM {
                             false => "udiv",
                         };
 
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = {} {} %{}, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             llvm_op,
                             result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            left_converted,
+                            right_converted
                         ));
                     }
                     ">" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = icmp {}gt {} %{}, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             if self.type_is_signed(&eval.register.var_type) {
                                 "s"
                             } else {
                                 "u"
                             },
                             result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            left_converted,
+                            right_converted
                         ));
                     }
                     "<" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = icmp {}lt {} %{}, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             if self.type_is_signed(&eval.register.var_type) {
                                 "s"
                             } else {
                                 "u"
                             },
                             result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            left_converted,
+                            right_converted
                         ));
                     }
                     ">=" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = icmp {}ge {} %{}, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             if self.type_is_signed(&eval.register.var_type) {
                                 "s"
                             } else {
                                 "u"
                             },
                             result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            left_converted,
+                            right_converted
                         ));
                     }
                     "<=" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = icmp {}le {} %{}, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             if self.type_is_signed(&eval.register.var_type) {
                                 "s"
                             } else {
                                 "u"
                             },
                             result_llvm_type,
-                            left_converted.to_string(),
-                            right_converted.to_string()
+                            left_converted,
+                            right_converted
                         ));
                     }
                     _ => {
@@ -1686,20 +1629,17 @@ impl LLVM {
             }
             Expression::UnaryOp { op, expr } => {
                 let inner_eval = self.transform_expression(*expr);
-                eval.prologue
+                eval.code
                     .instructions
-                    .extend(inner_eval.prologue.instructions);
-                eval.epilogue
-                    .instructions
-                    .extend(inner_eval.epilogue.instructions);
+                    .extend(inner_eval.code.instructions);
 
                 match op.as_str() {
                     "-" => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = sub {} 0, %{}",
-                            eval.register.to_string(),
+                            eval.register,
                             inner_eval.register.llvm_type(),
-                            inner_eval.register.to_string()
+                            inner_eval.register
                         ));
 
                         // Update the evaluation register's type
@@ -1709,11 +1649,11 @@ impl LLVM {
                         // First convert to boolean if not already
                         let bool_register = if inner_eval.register.var_type != Type::Bool {
                             let temp_reg = Register::new(Type::Bool);
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "%{} = icmp ne {} %{}, 0",
-                                temp_reg.to_string(),
+                                temp_reg,
                                 inner_eval.register.llvm_type(),
-                                inner_eval.register.to_string()
+                                inner_eval.register
                             ));
                             temp_reg
                         } else {
@@ -1721,10 +1661,9 @@ impl LLVM {
                         };
 
                         // Then negate the boolean
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = xor i1 %{}, true",
-                            eval.register.to_string(),
-                            bool_register.to_string()
+                            eval.register, bool_register
                         ));
                         eval.register.var_type = Type::Bool;
                     }
@@ -1735,12 +1674,9 @@ impl LLVM {
             }
             Expression::Cast { expr, target_type } => {
                 let inner_eval = self.transform_expression(*expr);
-                eval.prologue
+                eval.code
                     .instructions
-                    .extend(inner_eval.prologue.instructions);
-                eval.prologue
-                    .instructions
-                    .extend(inner_eval.epilogue.instructions);
+                    .extend(inner_eval.code.instructions);
 
                 let source_type = &inner_eval.register.llvm_type();
                 let target_llvm = self.type_to_llvm(&target_type);
@@ -1748,76 +1684,55 @@ impl LLVM {
                 match (source_type.as_str(), target_llvm.as_str()) {
                     // Integer truncation (larger to smaller)
                     ("i64", "i32") | ("i64", "i16") | ("i64", "i8") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = trunc {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
                     // Integer extension (smaller to larger)
                     ("i32", "i64") | ("i16", "i64") | ("i8", "i64") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = sext {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
                     // Float to integer
                     ("float", "i32") | ("float", "i64") | ("double", "i32") | ("double", "i64") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = fptosi {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
                     // Integer to float
                     ("i32", "float") | ("i64", "float") | ("i32", "double") | ("i64", "double") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = sitofp {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
                     // Float precision conversion
                     ("float", "double") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = fpext {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
                     ("double", "float") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = fptrunc {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
                     // Boolean conversions
                     ("i1", "i32") | ("i1", "i64") => {
-                        eval.epilogue.push(format!(
+                        eval.code.push(format!(
                             "%{} = zext {} %{} to {}",
-                            eval.register.to_string(),
-                            source_type,
-                            inner_eval.register.to_string(),
-                            target_llvm
+                            eval.register, source_type, inner_eval.register, target_llvm
                         ));
                     }
 
@@ -1879,8 +1794,7 @@ impl LLVM {
                             .insert(self_symbol.0.clone(), self_symbol.1.clone());
 
                         Evaluation {
-                            prologue: IR::new(),
-                            epilogue: IR::new(),
+                            code: IR::new(),
                             register: self_symbol.0.clone(),
                             current_class_context: self.current_class_scope.as_deref().cloned(),
                             current_struct_context: None,
@@ -1890,10 +1804,8 @@ impl LLVM {
                     _ => self.transform_expression(*object),
                 };
 
-                let object_prologue = object_eval.prologue.instructions.clone();
-                let object_epilogue = object_eval.epilogue.instructions.clone();
-                eval.prologue.instructions.extend(object_prologue);
-                eval.epilogue.instructions.extend(object_epilogue);
+                let object_code = object_eval.code.instructions.clone();
+                eval.code.instructions.extend(object_code);
 
                 // println!(
                 //     "{}\n{}\n",
@@ -1951,20 +1863,17 @@ impl LLVM {
                     )))),
                     String::from("vtable_ptr_ptr"),
                 );
-                eval.epilogue.instructions.push(format!(
+                eval.code.instructions.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 0",
-                    vtable_ptr_ptr.to_string(),
-                    method_class.name,
-                    object_eval.register.to_string()
+                    vtable_ptr_ptr, method_class.name, object_eval.register
                 ));
                 let vtable_ptr = Register::new_var(
                     Type::Pointer(Box::new(self.get_class_type(&owning_class.name))),
                     String::from("vtable_ptr"),
                 );
-                eval.epilogue.instructions.push(format!(
+                eval.code.instructions.push(format!(
                     "%{} = load ptr, ptr %{}",
-                    vtable_ptr.to_string(),
-                    vtable_ptr_ptr.to_string()
+                    vtable_ptr, vtable_ptr_ptr
                 ));
 
                 // Get the method pointer by finding its index in the vtable
@@ -1979,28 +1888,48 @@ impl LLVM {
                         _ => false,
                     })
                     .map(|(i, ((m, _vis), _name))| (i, m))
-                    .expect(&format!(
-                        "Method '{}' not found in class '{}'",
-                        method, method_class.name
-                    ));
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Method '{}' not found in class '{}'",
+                            method, method_class.name
+                        )
+                    });
                 let method_ret = match &**method_entry {
                     Statement::Function { ret_type, .. } => ret_type,
                     _ => panic!("Method statement {:?} isn't a function!", method_entry),
                 };
                 let (method_type, _method_args, _method_signature) = match &**method_entry {
-                    Statement::Function { name, ret_type, params, .. } => {
-                        let param_types: Vec<Type> = params.iter().map(|param| param.var_type.clone()).collect();
+                    Statement::Function {
+                        name,
+                        ret_type,
+                        params,
+                        ..
+                    } => {
+                        let param_types: Vec<Type> =
+                            params.iter().map(|param| param.var_type.clone()).collect();
 
-                        let param_sig_no_self = param_types.iter().map(|t| self.type_to_llvm(t)).collect::<Vec<_>>().join(", ");
+                        let param_sig_no_self = param_types
+                            .iter()
+                            .map(|t| self.type_to_llvm(t))
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
-                        let param_sig_all = if param_sig_no_self.is_empty() { "ptr".to_string() } else { format!("ptr, {}", param_sig_no_self) };
+                        let param_sig_all = if param_sig_no_self.is_empty() {
+                            "ptr".to_string()
+                        } else {
+                            format!("ptr, {}", param_sig_no_self)
+                        };
 
-                        (Type::Function {
-                            name: name.clone(),
-                            args: param_types.clone(),
-                            ret_type: Box::new(ret_type.clone()),
-                            is_variadic: false,
-                        }, param_types, format!("({}) -> {}", param_sig_all, self.type_to_llvm(&ret_type)))
+                        (
+                            Type::Function {
+                                name: name.clone(),
+                                args: param_types.clone(),
+                                ret_type: Box::new(ret_type.clone()),
+                                is_variadic: false,
+                            },
+                            param_types,
+                            format!("({}) -> {}", param_sig_all, self.type_to_llvm(ret_type)),
+                        )
                     }
                     _ => panic!("Method statement {:?} isn't a function!", method_entry),
                 };
@@ -2011,24 +1940,27 @@ impl LLVM {
                 // Load method from vtable by index
                 let method_ptr_ptr = Register::new_var(
                     Type::Pointer(Box::new(Type::Pointer(Box::new(method_type.clone())))),
-                    format!("{}_{}_method_ptr_ptr", method_class.name.to_lowercase(), method.clone()),
+                    format!(
+                        "{}_{}_method_ptr_ptr",
+                        method_class.name.to_lowercase(),
+                        method.clone()
+                    ),
                 );
-                eval.epilogue.instructions.push(format!(
+                eval.code.instructions.push(format!(
                     "%{} = getelementptr inbounds %{}VTable, ptr %{}, i32 0, i32 {}",
-                    method_ptr_ptr.to_string(),
-                    method_class.name,
-                    vtable_ptr.to_string(),
-                    method_idx
+                    method_ptr_ptr, method_class.name, vtable_ptr, method_idx
                 ));
                 let method_ptr_raw = Register::new_var(
                     Type::Pointer(Box::new(method_type.clone())),
-                    format!("{}_{}_method_ptr_raw", method_class.name.to_lowercase(), method.clone()),
+                    format!(
+                        "{}_{}_method_ptr_raw",
+                        method_class.name.to_lowercase(),
+                        method.clone()
+                    ),
                 );
-                eval.epilogue
-                    .instructions
-                    .push(format!("%{} = load ptr, ptr %{}",
-                    method_ptr_raw.to_string(),
-                    method_ptr_ptr.to_string()
+                eval.code.instructions.push(format!(
+                    "%{} = load ptr, ptr %{}",
+                    method_ptr_raw, method_ptr_ptr
                 ));
 
                 // Prepare arguments
@@ -2036,33 +1968,30 @@ impl LLVM {
                 for arg in _args {
                     let arg = arg.clone();
                     let arg_eval = self.transform_expression(arg);
-                    eval.prologue
+                    eval.code
                         .instructions
-                        .extend(arg_eval.prologue.instructions);
-                    eval.epilogue
-                        .instructions
-                        .extend(arg_eval.epilogue.instructions);
+                        .extend(arg_eval.code.instructions);
                     arg_registers.push(arg_eval.register);
                 }
 
                 let arg_string_no_self = arg_registers
                     .iter()
-                    .map(|a| format!("{} %{}", self.type_to_llvm(&a.var_type), a.to_string()))
+                    .map(|a| format!("{} %{}", self.type_to_llvm(&a.var_type), a))
                     .collect::<Vec<_>>()
                     .join(", ");
 
                 let arg_string_all = if arg_string_no_self.is_empty() {
-                    format!("ptr %{}", object_eval.register.to_string())
+                    format!("ptr %{}", object_eval.register)
                 } else {
-                    format!("ptr %{}, {}", object_eval.register.to_string(), arg_string_no_self)
+                    format!("ptr %{}, {}", object_eval.register, arg_string_no_self)
                 };
 
                 // Generate the method call
-                eval.epilogue.push(format!(
+                eval.code.push(format!(
                     "%{} = call {} %{}({})",
-                    eval.register.to_string(),
+                    eval.register,
                     self.type_to_llvm(method_ret),
-                    method_ptr_raw.to_string(),
+                    method_ptr_raw,
                     arg_string_all
                 ));
             }
@@ -2089,8 +2018,7 @@ impl LLVM {
                             .expect("Expected 'self' variable in class scope");
 
                         Evaluation {
-                            prologue: IR::new(),
-                            epilogue: IR::new(),
+                            code: IR::new(),
                             register: self_symbol.0.clone(),
                             current_class_context: self.current_class_scope.as_deref().cloned(),
                             current_struct_context: None,
@@ -2100,12 +2028,9 @@ impl LLVM {
                     _ => self.transform_expression(*object),
                 };
 
-                eval.prologue
+                eval.code
                     .instructions
-                    .extend(object_eval.prologue.instructions);
-                eval.epilogue
-                    .instructions
-                    .extend(object_eval.epilogue.instructions);
+                    .extend(object_eval.code.instructions);
 
                 // Ensure the object is a pointer to a class
                 let _class_type = match &object_eval.register.var_type {
@@ -2121,15 +2046,14 @@ impl LLVM {
                 let mut class_cursor = object_eval.current_class_context.clone();
 
                 while let Some(class_def) = class_cursor.clone() {
-                    if let Statement::Class { fields, .. } = &class_def.statement {
-                        if let Some((i, (var, _vis))) = fields
+                    if let Statement::Class { fields, .. } = &class_def.statement
+                        && let Some((i, (var, _vis))) = fields
                             .iter()
                             .enumerate()
                             .find(|(_, (f, _))| f.name == field)
-                        {
-                            found = Some((i, var.clone(), class_def.clone()));
-                            break;
-                        }
+                    {
+                        found = Some((i, var.clone(), class_def.clone()));
+                        break;
                     }
                     // Move to parent
                     class_cursor = class_def.parent.as_ref().map(|p| (*p.clone()));
@@ -2143,12 +2067,15 @@ impl LLVM {
                 let _owning_class = field_class.clone();
 
                 // Generate GEP instruction to get the field pointer
-                let field_ptr_register = Register::new_var(field_var.var_type.clone(), field_class.name.clone().to_lowercase());
-                eval.epilogue.push(format!(
+                let field_ptr_register = Register::new_var(
+                    field_var.var_type.clone(),
+                    field_class.name.clone().to_lowercase(),
+                );
+                eval.code.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
-                    field_ptr_register.to_string(),
+                    field_ptr_register,
                     field_class.name,
-                    object_eval.register.to_string(),
+                    object_eval.register,
                     field_index + 1 // +1 because first element is the vtable pointer
                 ));
 
@@ -2159,23 +2086,25 @@ impl LLVM {
                         eval.register = field_ptr_register;
                     } else {
                         // Load the value if it's not a class pointer
-                        let field_value_register = Register::new_var(field_type.clone(), field_var.name.clone());
-                        eval.epilogue.push(format!(
+                        let field_value_register =
+                            Register::new_var(field_type.clone(), field_var.name.clone());
+                        eval.code.push(format!(
                             "%{} = load {}, ptr %{}",
-                            field_value_register.to_string(),
+                            field_value_register,
                             self.type_to_llvm(&field_type),
-                            field_ptr_register.to_string()
+                            field_ptr_register
                         ));
                         eval.register = field_value_register;
                     }
                 } else {
                     // Load the value if it's not a pointer
-                    let field_value_register = Register::new_var(field_type.clone(), field_var.name.clone());
-                    eval.epilogue.push(format!(
+                    let field_value_register =
+                        Register::new_var(field_type.clone(), field_var.name.clone());
+                    eval.code.push(format!(
                         "%{} = load {}, ptr %{}",
-                        field_value_register.to_string(),
+                        field_value_register,
                         self.type_to_llvm(&field_type),
-                        field_ptr_register.to_string()
+                        field_ptr_register
                     ));
                     eval.register = field_value_register;
                 }
@@ -2188,9 +2117,13 @@ impl LLVM {
 
                         // Find the class in the current scope
                         let class = self.class_definitions.get(&var.name).cloned().or_else(|| {
-                            self.current_class_scope
-                                .as_ref()
-                                .and_then(|c| if c.name == var.name { Some(*c.clone()) } else { None })
+                            self.current_class_scope.as_ref().and_then(|c| {
+                                if c.name == var.name {
+                                    Some(*c.clone())
+                                } else {
+                                    None
+                                }
+                            })
                         });
 
                         // println!("[LLVM Call] Function: {:?}, Class: {:?}", func, class);
@@ -2200,9 +2133,11 @@ impl LLVM {
 
                         // If the function is not found and the class name is the same
                         // as the variable name, treat it as a method call to the constructor
-                        let (func_name, constructor, is_constructor) = if func.is_none() && class.is_some() {
-                            let class_name = class.as_ref().unwrap().name.clone();
-                            let class_def = class.as_ref().unwrap().clone();
+                        let (func_name, constructor, is_constructor) = if func.is_none()
+                            && let Some(class) = class.as_ref()
+                        {
+                            let class_name = class.name.clone();
+                            let class_def = class.clone();
                             match class_def.statement {
                                 Statement::Class { .. } => {
                                     // Register the class type in the evaluation context
@@ -2213,12 +2148,10 @@ impl LLVM {
                             }
                             // Find the class definition and extract the constructor method from it
                             let c_name = format!("__{}_init", class_name);
-                            let c = class_def.all_methods
+                            let c = class_def
+                                .all_methods
                                 .iter()
-                                .find(|((m, _), method_class_name)| match m.as_ref() {
-                                    Statement::Function { name, .. } if name == &c_name && method_class_name == &class_name => true,
-                                    _ => false,
-                                })
+                                .find(|((m, _), method_class_name)| matches!(m.as_ref(), Statement::Function { name, .. } if name == &c_name && method_class_name == &class_name))
                                 .map(|(m, _)| m.clone())
                                 .unwrap_or_else(|| {
                                     panic!(
@@ -2229,66 +2162,73 @@ impl LLVM {
                                 });
 
                             let c_fun = match &*c.0 {
-                                Statement::Function { name, ret_type, params, .. } => {
-                                    Type::Function {
-                                        name: name.clone(),
-                                        args: params.iter().map(|p| p.var_type.clone()).collect(),
-                                        ret_type: Box::new(ret_type.clone()),
-                                        is_variadic: false,
-                                    }
-                                }
+                                Statement::Function {
+                                    name,
+                                    ret_type,
+                                    params,
+                                    ..
+                                } => Type::Function {
+                                    name: name.clone(),
+                                    args: params.iter().map(|p| p.var_type.clone()).collect(),
+                                    ret_type: Box::new(ret_type.clone()),
+                                    is_variadic: false,
+                                },
                                 _ => panic!("Expected function statement for constructor"),
                             };
 
-                            (format!("__{}___{}_init", class_name, class_name), Some(c_fun), true)
+                            (
+                                format!("__{}___{}_init", class_name, class_name),
+                                Some(c_fun),
+                                true,
+                            )
                         } else {
                             eval.register.var_type = func.as_ref().unwrap().1.var_type.clone();
                             (var.name.clone(), None, false)
                         };
-                        
+
                         let mut arg_registers = Vec::new();
 
-                        if class.is_some() && is_constructor {
-                            eval.epilogue.push(format!("; Constructing {}", class.as_ref().unwrap().name.clone()));
+                        if let Some(class) = class.as_ref()
+                            && is_constructor
+                        {
+                            eval.code
+                                .push(format!("; Constructing {}", class.name.clone()));
                             // Make a new register for self and allocate the type in the stack
-                            let self_reg = Register::new_var(eval.register.var_type.clone(), class.as_ref().unwrap().name.clone().to_lowercase());
-                            
+                            let self_reg = Register::new_var(
+                                eval.register.var_type.clone(),
+                                class.name.clone().to_lowercase(),
+                            );
+
                             // Add `self` as the first argument
                             arg_registers.push(self_reg.clone());
 
                             // Since we call the constructor later, this whole
                             // expression will just return the `self` pointer
                             eval.register = self_reg.clone();
-                            
-                            eval.epilogue.push(format!(
-                                "%{} = alloca %{}, align 8",
-                                self_reg.to_string(),
-                                class.as_ref().unwrap().name
-                            ));
+
+                            eval.code
+                                .push(format!("%{} = alloca %{}, align 8", self_reg, class.name));
                             // Get the vtable pointer from the first element
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "%vtable_ptr = getelementptr inbounds %{}, ptr %{}, i32 0, i32 0",
-                                class.as_ref().unwrap().name,
-                                self_reg.to_string()
+                                class.name, self_reg
                             ));
                             // Store the pointer to constant vtable in readonly data in %vtable_ptr
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "store ptr @k_{}VTable, ptr %vtable_ptr, align 8",
-                                class.as_ref().unwrap().name
+                                class.name
                             ));
                         }
 
                         // Collect arguments from the type evaluated
-                        let func_typ = if func.is_some() {
-                            func.as_ref().unwrap().1.var_type.clone()
+                        let func_typ = if let Some(func) = func.as_ref() {
+                            func.1.var_type.clone()
+                        } else if let Some(c) = constructor.as_ref() {
+                            c.clone()
                         } else {
-                            if constructor.is_some() {
-                                constructor.as_ref().unwrap().clone()
-                            } else {
-                                panic!("Function or constructor type not found for call");
-                            }
+                            panic!("Function or constructor type not found for call");
                         };
-                        
+
                         let (expected_args, expected_ret_type) = match &func_typ {
                             Type::Function { args, ret_type, .. } => {
                                 (args.clone(), Box::new(ret_type.clone()))
@@ -2299,12 +2239,9 @@ impl LLVM {
                         // Prepare user given arguments
                         for (i, arg) in args.into_iter().enumerate() {
                             let arg_eval = self.transform_expression(arg);
-                            eval.prologue
+                            eval.code
                                 .instructions
-                                .extend(arg_eval.prologue.instructions);
-                            eval.epilogue
-                                .instructions
-                                .extend(arg_eval.epilogue.instructions);
+                                .extend(arg_eval.code.instructions);
 
                             // println!(">>>> {:?}", arg_eval.register);
                             // println!("<<<< {:?}", expected_args[i]);
@@ -2312,7 +2249,7 @@ impl LLVM {
                             // Insert type coercion
                             if arg_eval.register.var_type != expected_args[i] {
                                 let coerced = self.insert_type_conversion(
-                                    &mut eval.epilogue,
+                                    &mut eval.code,
                                     &arg_eval.register,
                                     &expected_args[i],
                                 );
@@ -2325,7 +2262,7 @@ impl LLVM {
                         // Call the function
                         let args_str = arg_registers
                             .iter()
-                            .map(|r| format!("{} %{}", self.type_to_llvm(&r.var_type), r.to_string()))
+                            .map(|r| format!("{} %{}", self.type_to_llvm(&r.var_type), r))
                             .collect::<Vec<_>>()
                             .join(", ");
 
@@ -2339,18 +2276,18 @@ impl LLVM {
                             // } else {
                             //     eval.register = Register::new(Type::NoneType);
                             // }
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "call {} @{}({})",
-                                self.type_to_llvm(&**expected_ret_type),
+                                self.type_to_llvm(&expected_ret_type),
                                 func_name,
                                 args_str
                             ));
                         } else {
                             eval.register = Register::new(**expected_ret_type.clone());
-                            eval.epilogue.push(format!(
+                            eval.code.push(format!(
                                 "%{} = call {} @{}({})",
-                                eval.register.to_string(),
-                                self.type_to_llvm(&**expected_ret_type),
+                                eval.register,
+                                self.type_to_llvm(&expected_ret_type),
                                 func_name,
                                 args_str
                             ));
@@ -2384,9 +2321,7 @@ impl LLVM {
 
         // If we have a function, we need to get the return type as FROM
         let from_llvm = match &from_register.var_type {
-            Type::Function { ret_type, .. } => {
-                self.type_to_llvm(ret_type)
-            }
+            Type::Function { ret_type, .. } => self.type_to_llvm(ret_type),
             _ => from_register.llvm_type(),
         };
 
@@ -2398,80 +2333,56 @@ impl LLVM {
             ("i64", "i32") | ("i64", "i16") | ("i64", "i8") | ("i64", "i1") => {
                 code.push(format!(
                     "%{} = trunc {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Truncation from i32
             ("i32", "i16") | ("i32", "i8") | ("i32", "i1") => {
                 code.push(format!(
                     "%{} = trunc {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Truncation from i16
             ("i16", "i8") | ("i16", "i1") => {
                 code.push(format!(
                     "%{} = trunc {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Truncation from i8
             ("i8", "i1") => {
                 code.push(format!(
                     "%{} = trunc {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i64
             ("i32", "i64") | ("i16", "i64") | ("i8", "i64") | ("i1", "i64") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i32
             ("i8", "i32") | ("i16", "i32") | ("i1", "i32") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i16
             ("i8", "i16") | ("i1", "i16") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i8
             ("i1", "i8") => {
                 code.push(format!(
                     "%{} = zext {} %{} to {}",
-                    new_register.to_string(),
-                    from_llvm,
-                    from_register.to_string(),
-                    to_llvm
+                    new_register, from_llvm, from_register, to_llvm
                 ));
             }
             _ => panic!(
@@ -2537,7 +2448,7 @@ impl LLVM {
             let return_type = self.type_to_llvm(ret_type);
             let params = args
                 .iter()
-                .map(|arg_type| format!("{}", self.type_to_llvm(arg_type)))
+                .map(|arg_type| self.type_to_llvm(arg_type).to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             let variadic_str = if *is_variadic {
@@ -2555,12 +2466,10 @@ impl LLVM {
                 } else {
                     format!("{} {}@{}({})", return_type, variadic_str, func_name, params)
                 }
+            } else if !no_args {
+                return_type.to_string()
             } else {
-                if !no_args {
-                    format!("{}", return_type)
-                } else {
-                    format!("{} ({})", return_type, params)
-                }
+                format!("{} ({})", return_type, params)
             }
         } else {
             panic!("generate_function_signature called with non-function type");
@@ -2630,10 +2539,9 @@ impl LLVM {
         // Find class in the class definitions
         let class_def = self.current_class_scope.as_ref().map_or_else(
             || {
-                self.class_definitions.get(class_name).expect(&format!(
-                    "Class '{}' not found in class definitions",
-                    class_name
-                ))
+                self.class_definitions.get(class_name).unwrap_or_else(|| {
+                    panic!("Class '{}' not found in class definitions", class_name)
+                })
             },
             |class_def| class_def.as_ref(),
         );
@@ -2693,19 +2601,18 @@ impl LLVM {
     }
 
     fn enter_main(&mut self) {
-        self.current_func_scope = Some(Box::new(
-            Function::new(
-                "main".to_string(),             // name
-                None,                           // owner
-                Statement::Function {           // statement
-                    name: "main".to_string(),
-                    params: vec![],
-                    ret_type: Type::I32,
-                    body: Block::new(vec![])
-                },
-                vec![],                         // args
-                Type::I32,                      // ret_type
-            )
-        ));
+        self.current_func_scope = Some(Box::new(Function::new(
+            "main".to_string(), // name
+            None,               // owner
+            Statement::Function {
+                // statement
+                name: "main".to_string(),
+                params: vec![],
+                ret_type: Type::I32,
+                body: Block::new(vec![]),
+            },
+            vec![],    // args
+            Type::I32, // ret_type
+        )));
     }
 }

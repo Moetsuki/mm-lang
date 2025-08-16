@@ -168,10 +168,10 @@ fn process(
             println!("Exit code: {}", &exit_code);
 
             if let Some(_expected_exit_code) = expected_exit_code {
-                panic!(
-                    "This isn't working well with `cargo t` because it captures the exit code.\nIndividual tests work fine.\nFIgure out what's wrong later."
-                );
-                //assert_eq!(exit_code, _expected_exit_code, "Program did not exit with expected code");
+                // panic!(
+                //     "This isn't working well with `cargo t` because it captures the exit code.\nIndividual tests work fine.\nFIgure out what's wrong later."
+                // );
+                assert_eq!(exit_code, _expected_exit_code, "Program did not exit with expected code");
             }
             if let Some(expected_output) = expected {
                 assert_eq!(
@@ -238,8 +238,8 @@ fn main() {
 
 #[test]
 fn test_assignment() {
-    let source = "x: i64 = 5; y: i64 = 10;";
-    process(source, None, None, false);
+    let source = "x: i64 = 5; y: i64 = 10; return 2 * x + y / 2;";
+    process(source, None, Some(15), false);
 }
 
 #[test]
@@ -248,8 +248,10 @@ fn test_function() {
     function add(a: i64, b: i64) -> i64 {
         return a + b;
     }
+
+    return add(5, 10);
     "#;
-    process(source, None, None, false);
+    process(source, None, Some(15), false);
 }
 
 #[test]
@@ -260,9 +262,10 @@ fn test_if_statement() {
         y: i64 = 20;
     } else {
         y: i64 = 30;
+        return y;
     }
     "#;
-    process(source, None, None, false);
+    process(source, None, Some(30), false);
 }
 
 #[test]
@@ -273,10 +276,11 @@ fn test_block() {
         y: i64 = 10;
         if x < y {
             x = y;
+            return x;
         }
     }
     "#;
-    process(source, None, None, false);
+    process(source, None, Some(10), false);
 }
 
 #[test]
@@ -298,7 +302,7 @@ fn test_function_call() {
 
     return result;
     "#;
-    process(source, None, None, false);
+    process(source, None, Some(20), false);
 }
 
 #[test]
