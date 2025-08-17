@@ -934,47 +934,62 @@ impl LLVM {
                 Statement::Call { callee, args } => {
                     match callee {
                         Expression::Variable(var_expr) => {
-                            // existing function call logic
+                            //
+                            // Get function and generate its signature for later use
+                            //
                             let func_name = var_expr.name.clone();
                             let func_var =
                                 self.scope.find_function(&func_name).unwrap_or_else(|| {
                                     panic!("Function '{}' not found in global scope", func_name)
-                                });
-                            let param_types =
-                                if let Type::Function { args, .. } = &func_var.var_type {
-                                    args.clone()
-                                } else {
-                                    panic!("Expected function type for '{}'", func_name);
-                                };
-                            let signature = self.generate_function_signature(
+                                }).clone();
+                            let func_sig = self.generate_function_signature(
                                 func_var.name.clone(),
                                 &func_var.var_type.clone(),
                                 false,
                                 false,
                             );
+
+                            //
+                            // Get the arguments and generate arguement string for later use
+                            //
                             let mut arg_evals = Vec::new();
                             for arg in args {
-                                let arg_eval = self.transform_expression(arg.clone());
+                                let arg_eval = self.transform_expression(arg.clone()).clone();
                                 eval.code
                                     .instructions
                                     .extend(arg_eval.code.instructions.clone());
-                                arg_evals.push(arg_eval);
+                                arg_evals.push(arg_eval.clone());
                             }
+                            let (arg_types, ret_type) =
+                                if let Type::Function { args, ret_type, .. } = &func_var.var_type {
+                                    (args.clone(), ret_type.clone())
+                                } else {
+                                    panic!("Expected function type for '{}'", func_name);
+                                };
                             let args_str = arg_evals
                                 .iter()
-                                .zip(param_types.iter())
+                                .zip(arg_types.iter())
                                 .map(|(arg_eval, param_type)| {
                                     format!(
                                         "{} %{}",
                                         self.type_to_llvm(param_type),
-                                        arg_eval.register
+                                        arg_eval.register.clone()
                                     )
                                 })
                                 .collect::<Vec<_>>()
                                 .join(", ");
+
+                            //
+                            // Create a new register to store the result
+                            //
+                            eval.register = Register::new_var(*ret_type, format!("{}_result", func_name.clone()));
+
+                            //
+                            // Call the function
+                            //
                             eval.code.push(format!(
                                 "%{} = call {}({})",
-                                eval.register, signature, args_str
+                                eval.register, func_sig, args_str
                             ));
                         }
                         _ => {
@@ -1936,6 +1951,7 @@ impl LLVM {
 
                 // Set the evaluation register to be the method's return type
                 eval.register.var_type = method_ret.clone();
+                eval.register.name = format!("{}_{}_result", class_name.clone().to_lowercase(), method.clone());
 
                 // Load method from vtable by index
                 let method_ptr_ptr = Register::new_var(
