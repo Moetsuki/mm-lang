@@ -351,6 +351,36 @@ fn test_printf() {
 }
 
 #[test]
+fn test_operator_comp() {
+    let source = r#"
+        return 5 == 6;
+    "#;
+    process(source, None, Some(0), false);
+}
+
+#[test]
+fn test_precedence_1() {
+    let source = r#"
+    x: i64 = 5;
+    y: i64 = 10;
+    z: i64 = x + y * 2; // y * 2 is evaluated first
+    return z; // Should return 25
+    "#;
+    process(source, None, Some(25), false);
+}
+
+#[test]
+fn test_precedence_2 () {
+    let source = r#"
+    x: i64 = 5;
+    y: i64 = 10;
+    z: bool = (25 == x + y * 2); // y * 2 is evaluated first
+    return z; // Should return true
+    "#;
+    process(source, None, Some(1), false);
+}
+
+#[test]
 fn test_class() {
     let source = r#"
     class Entity {

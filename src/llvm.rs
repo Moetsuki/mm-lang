@@ -1643,6 +1643,28 @@ impl LLVM {
                             right_converted
                         ));
                     }
+                    "==" => {
+                        eval.code.push(format!(
+                            "%{} = icmp eq {} %{}, %{}",
+                            eval.register,
+                            result_llvm_type,
+                            left_converted,
+                            right_converted
+                        ));
+
+                        eval.register.var_type = Type::Bool;
+                    }
+                    "!=" => {
+                        eval.code.push(format!(
+                            "%{} = icmp ne {} %{}, %{}",
+                            eval.register,
+                            result_llvm_type,
+                            left_converted,
+                            right_converted
+                        ));
+
+                        eval.register.var_type = Type::Bool;
+                    }
                     _ => {
                         panic!(
                             "LLVM Expression transform: unsupported binary operator: {}",
@@ -2385,31 +2407,31 @@ impl LLVM {
                     new_register, from_llvm, from_register, to_llvm
                 ));
             }
+            // i1 -> wider ints should be zero-extended (true -> 1)
+            ("i1", "i8") | ("i1", "i16") | ("i1", "i32") | ("i1", "i64") => {
+                code.push(format!(
+                    "%{} = zext {} %{} to {}",
+                    new_register, from_llvm, from_register, to_llvm
+                ));
+            }
             // Sign extension to i64
-            ("i32", "i64") | ("i16", "i64") | ("i8", "i64") | ("i1", "i64") => {
+            ("i32", "i64") | ("i16", "i64") | ("i8", "i64") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
                     new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i32
-            ("i8", "i32") | ("i16", "i32") | ("i1", "i32") => {
+            ("i8", "i32") | ("i16", "i32") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
                     new_register, from_llvm, from_register, to_llvm
                 ));
             }
             // Sign extension to i16
-            ("i8", "i16") | ("i1", "i16") => {
+            ("i8", "i16") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
-                    new_register, from_llvm, from_register, to_llvm
-                ));
-            }
-            // Sign extension to i8
-            ("i1", "i8") => {
-                code.push(format!(
-                    "%{} = zext {} %{} to {}",
                     new_register, from_llvm, from_register, to_llvm
                 ));
             }
