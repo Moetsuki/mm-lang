@@ -52,7 +52,7 @@ impl Ast {
     }
 
     pub fn expect(&mut self, expected: &Token) {
-        if let Some(lexical_token) = self.next_token() {
+        if let Some(lexical_token) = self.next_token().as_ref() {
             if &lexical_token.token != expected {
                 panic!(
                     "Expected {:?}, found {:?} at line {}, column {}",
@@ -492,6 +492,19 @@ impl Ast {
                         break;
                     }
                 }
+                // Unary Minus Case
+                Token::Operator(p) if p == "-" => {
+                    args.push(self.parse_expr());
+                    if let Some(next_token) = self.peek_token() {
+                        if next_token.token == Token::Punctuation(",".to_string()) {
+                            self.next_token(); // consume ','
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
                 _ => break,
             }
         }
@@ -555,132 +568,136 @@ impl Ast {
         }
     }
 
-    // Entry point for expressions (lowest precedence)
-    fn parse_expr(&mut self) -> Expression {
-        let mut expr = self.parse_term();
+    // Handles postfix operators like method/field access and function calls with high precedence
+    fn parse_postfix(&mut self) -> Expression {
+        let mut expr = self.parse_factor();
 
         while let Some(lexical_token) = self.peek_token() {
             match &lexical_token.token {
-                Token::Operator(op) => {
-                    if OPERATORS.contains(&op.as_str()) {
-                        let op = op.clone();
-                        self.next_token();
-                        let rhs = self.parse_term();
-                        expr = Expression::BinaryOp {
-                            op,
-                            left: Box::new(expr),
-                            right: Box::new(rhs),
+                Token::Punctuation(p) if p == "." => {
+                    self.next_token(); // consume the '.'
+
+                    // After the dot we expect an identifier
+                    if let Some(tok) = self.next_token() {
+                        let member_name = if let Token::Identifier(name) = &tok.token {
+                            name.clone()
+                        } else {
+                            panic!(
+                                "Expected member name after '.', found {:?} at line {}, column {}",
+                                tok.token, tok.line, tok.column
+                            );
                         };
-                    } else {
-                        break;
-                    }
-                }
-                Token::Newline => {
-                    // Ignore newlines and continue
-                    self.next_token();
-                }
-                Token::Punctuation(p) => {
-                    // End of expression
-                    match p.as_str() {
-                        ")" | "}" | "{" | "," => {
-                            break; // Do nothing, let caller handle these
-                        }
-                        ";" => {
-                            self.next_token(); // Consume the semicolon
-                            break; // Return expression to caller
-                        }
-                        "." => {
-                            self.next_token(); // Consume the '.'
 
-                            // After the dot we expect an identifier
-                            if let Some(tok) = self.next_token() {
-                                let method_name = if let Token::Identifier(name) = &tok.token {
-                                    name.clone()
-                                } else {
-                                    panic!(
-                                        "Expected method name after '.', found {:?} at line {}, column {}",
-                                        tok.token, tok.line, tok.column
-                                    );
-                                };
-                                // End borrow of tok before further borrowing self
-                                let _ = tok;
+                        // Determine if this is a method call (next token is '(') or a field access
+                        let is_method_call = matches!(
+                            self.peek_token(),
+                            Some(next_next_token)
+                                if next_next_token.token == Token::Punctuation("(".to_string())
+                        );
 
-                                // Determine if this is a method call (next token is '(') or a field access
-                                let is_method_call = matches!(
-                                    self.peek_token(),
-                                    Some(next_next_token)
-                                        if next_next_token.token == Token::Punctuation("(".to_string())
-                                );
-
-                                if is_method_call {
-                                    self.expect(&Token::Punctuation("(".to_string()));
-                                    let args = self.parse_args();
-                                    self.expect(&Token::Punctuation(")".to_string()));
-                                    expr = Expression::MethodCall {
-                                        object: Box::new(expr),
-                                        method: method_name,
-                                        args,
-                                    };
-                                } else {
-                                    expr = Expression::FieldAccess {
-                                        object: Box::new(expr),
-                                        field: method_name,
-                                    };
-                                }
-                            } else {
-                                panic!(
-                                    "Expected method name after '.', but no more tokens available"
-                                );
-                            }
-
-                            // Do not give control to the caller by breaking, continue parsing
-                        }
-                        "(" => {
-                            self.next_token(); // Consume the '('
-
-                            // Expr should be a function identifier
-                            if let Expression::Variable(var) = expr {
-                                let callee = Expression::Variable(var);
-                                let args = self.parse_args();
-                                expr = Expression::Call {
-                                    callee: Box::new(callee),
-                                    args,
-                                };
-                            } else {
-                                panic!("Expected a variable before '(', found {:?}", expr);
-                            }
-
-                            // Expect the closing parenthesis
+                        if is_method_call {
+                            self.expect(&Token::Punctuation("(".to_string()));
+                            let args = self.parse_args();
                             self.expect(&Token::Punctuation(")".to_string()));
-
-                            // Do not give control to the caller by breaking, continue parsing
+                            expr = Expression::MethodCall {
+                                object: Box::new(expr),
+                                method: member_name,
+                                args,
+                            };
+                        } else {
+                            expr = Expression::FieldAccess {
+                                object: Box::new(expr),
+                                field: member_name,
+                            };
                         }
-                        _ => {
-                            break; // Let caller handle unexpected punctuation
-                        }
+                    } else {
+                        panic!("Expected member name after '.', but no more tokens available");
                     }
                 }
-                _ => {
-                    break; // End of expression for any other token type
+                Token::Punctuation(p) if p == "(" => {
+                    // Function call on the current expression
+                    self.next_token(); // consume '('
+                    let args = self.parse_args();
+                    self.expect(&Token::Punctuation(")".to_string()));
+                    expr = Expression::Call {
+                        callee: Box::new(expr),
+                        args,
+                    };
                 }
+                _ => break,
             }
         }
 
         expr
     }
 
-    // This method should have high precedence in the expression parsing
-    fn parse_cast(&mut self) -> Expression {
-        let mut expr = self.parse_factor();
+    // Entry point for expressions (lowest precedence)
+    fn parse_expr(&mut self) -> Expression {
+        self.parse_comparison()
+    }
+
+    // New: comparisons (==, !=, <, >, <=, >=)
+    fn parse_comparison(&mut self) -> Expression {
+        let mut expr = self.parse_additive();
+
+        while let Some(tok) = self.peek_token() {
+            if let Token::Operator(op) = &tok.token {
+                match op.as_str() {
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                        let op = op.clone();
+                        self.next_token();
+                        let rhs = self.parse_additive();
+                        expr = Expression::BinaryOp {
+                            op,
+                            left: Box::new(expr),
+                            right: Box::new(rhs),
+                        };
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            break;
+        }
+
+        expr
+    }
+
+    fn parse_additive(&mut self) -> Expression {
+        let mut expr = self.parse_term();
+
+        while let Some(tok) = self.peek_token() {
+            if let Token::Operator(op) = &tok.token
+                && (op == "+" || op == "-") {
+                    let op = op.clone();
+                    self.next_token();
+                    let rhs = self.parse_term();
+                    expr = Expression::BinaryOp {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
+                    };
+                    continue;
+                }
+            break;
+        }
+
+        expr
+    }
+
+    fn parse_term(&mut self) -> Expression {
+        let mut expr = self.parse_cast();
 
         while let Some(lexical_token) = self.peek_token() {
-            if let Token::Keyword(keyword) = &lexical_token.token {
-                if keyword == "as" {
-                    self.next_token(); // consume 'as'
-                    let target_type = self.parse_type();
-                    expr = Expression::Cast {
-                        expr: Box::new(expr),
-                        target_type,
+            if let Token::Operator(op) = &lexical_token.token {
+                if op == "*" || op == "/" {
+                    let op = op.clone();
+                    self.next_token();
+                    let rhs = self.parse_cast(); 
+                    expr = Expression::BinaryOp {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(rhs),
                     };
                 } else {
                     break;
@@ -693,20 +710,18 @@ impl Ast {
         expr
     }
 
-    // Then modify parse_term to call parse_cast instead of parse_factor
-    fn parse_term(&mut self) -> Expression {
-        let mut expr = self.parse_cast(); // Changed from parse_factor
+    // This method should have high precedence in the expression parsing
+    fn parse_cast(&mut self) -> Expression {
+        let mut expr = self.parse_postfix();
 
         while let Some(lexical_token) = self.peek_token() {
-            if let Token::Operator(op) = &lexical_token.token {
-                if op == "*" || op == "/" {
-                    let op = op.clone();
-                    self.next_token();
-                    let rhs = self.parse_cast(); // Changed from parse_factor
-                    expr = Expression::BinaryOp {
-                        op,
-                        left: Box::new(expr),
-                        right: Box::new(rhs),
+            if let Token::Keyword(keyword) = &lexical_token.token {
+                if keyword == "as" {
+                    self.next_token(); // consume 'as'
+                    let target_type = self.parse_type();
+                    expr = Expression::Cast {
+                        expr: Box::new(expr),
+                        target_type,
                     };
                 } else {
                     break;

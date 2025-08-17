@@ -76,7 +76,7 @@ fn process(
 
     let _block = ast.parse();
 
-    // print_block(&_block, 0);
+    print_block(&_block, 0);
 
     let mut llvm = llvm::LLVM::new(ast);
 

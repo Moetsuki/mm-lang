@@ -14,14 +14,14 @@ pub const KEYWORDS: [&str; 19] = [
     "init", "destroy"
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LexicalToken {
     pub token: Token,
     pub line: usize,
     pub column: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Keyword(String),
     Identifier(String),
