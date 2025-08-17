@@ -156,7 +156,7 @@ fn process(
 
             let std_out = String::from_utf8_lossy(&run_output.stdout);
 
-            let exit_code = run_output.status.code().unwrap_or(-1);
+            let exit_code = run_output.status.code().unwrap();
 
             let std_err = String::from_utf8_lossy(&run_output.stderr);
 
@@ -167,11 +167,10 @@ fn process(
             }
             println!("Exit code: {}", &exit_code);
 
+
             if let Some(_expected_exit_code) = expected_exit_code {
-                // panic!(
-                //     "This isn't working well with `cargo t` because it captures the exit code.\nIndividual tests work fine.\nFIgure out what's wrong later."
-                // );
-                assert_eq!(exit_code, _expected_exit_code, "Program did not exit with expected code");
+                // trunc exit_code to 8 bits
+                assert_eq!(exit_code as i8, _expected_exit_code as i8, "Program did not exit with expected code");
             }
             if let Some(expected_output) = expected {
                 assert_eq!(
@@ -412,8 +411,9 @@ fn test_method_call() {
     ent: Entity = Entity();
     ent.name = "Test Entity";
     result: string = ent.name();
+    printf(result);
     "#;
-    process(source, None, None, false);
+    process(source, Some("Test Entity".to_string()), None, false);
 }
 
 #[test]
@@ -436,8 +436,12 @@ fn test_simple_class() {
             return self.y;
         }
     };
+
+    p: Point = Point(5, -15);
+
+    return p.get_x() + p.y;
     "#;
-    process(source, None, None, false);
+    process(source, None, Some(-10), false);
 }
 
 #[test]
