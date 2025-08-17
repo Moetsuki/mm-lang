@@ -193,12 +193,12 @@ impl Register {
     #[track_caller]
     pub fn new(var_type: Type) -> Self {
         let id = REGISTER_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let caller = backtrace::get_immediate_caller();
-        println!(
-            "{:<30} Register::new({})",
-            format!("{}:{}:{}", caller.file, caller.line, caller.column),
-            id
-        );
+        let _caller = backtrace::get_immediate_caller();
+        // println!(
+        //     "{:<30} Register::new({})",
+        //     format!("{}:{}:{}", _caller.file, _caller.line, _caller.column),
+        //     id
+        // );
         Register {
             id,
             var_type,
@@ -209,13 +209,13 @@ impl Register {
     #[track_caller]
     pub fn new_var(var_type: Type, name: String) -> Self {
         let id = REGISTER_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let caller = backtrace::get_immediate_caller();
-        println!(
-            "{:<30} Register::new_var({}_{})",
-            format!("{}:{}:{}", caller.file, caller.line, caller.column),
-            name,
-            id
-        );
+        let _caller = backtrace::get_immediate_caller();
+        // println!(
+        //     "{:<30} Register::new_var({}_{})",
+        //     format!("{}:{}:{}", _caller.file, _caller.line, _caller.column),
+        //     name,
+        //     id
+        // );
         Register { id, var_type, name }
     }
 
@@ -1497,8 +1497,17 @@ impl LLVM {
                 eval.register = var_symbol.0.clone();
             }
             Expression::BinaryOp { op, left, right } => {
-                let left_eval = self.transform_expression(*left);
-                let right_eval = self.transform_expression(*right);
+                let left_eval = self.transform_expression(*left.clone());
+                let right_eval = self.transform_expression(*right.clone());
+
+                println!("Expression::BinaryOp");
+                println!("{{ {:?}, {:?}, {:?} }}",
+                    op.clone(),
+                    format!("{} __ {}", left_eval.clone().register.clone().name, self.type_to_llvm(&left_eval.clone().register.clone().var_type)),
+                    format!("{} __ {}", right_eval.clone().register.clone().name, self.type_to_llvm(&right_eval.clone().register.clone().var_type)),
+                );
+                println!("L: {:?}", left.clone());
+                println!("R: {:?}", right.clone());
 
                 eval.code
                     .instructions
@@ -2049,9 +2058,9 @@ impl LLVM {
                     .extend(object_eval.code.instructions);
 
                 // Ensure the object is a pointer to a class
-                let _class_type = match &object_eval.register.var_type {
-                    Type::Pointer(inner_type) => match **inner_type {
-                        Type::Class { ref fields, .. } => fields.clone(),
+                let (_class_type,class_name) = match &object_eval.register.var_type {
+                    Type::Pointer(inner_type) => match &**inner_type {
+                        Type::Class { name, .. } => (self.get_class_type(name), name.clone()),
                         _ => panic!("Field access on non-class pointer"),
                     },
                     _ => panic!("Field access on non-pointer type"),
@@ -2059,14 +2068,17 @@ impl LLVM {
 
                 // Walk class hierarchy to find the field and remember which class owns it
                 let mut found: Option<(usize, Variable, Class)> = None;
-                let mut class_cursor = object_eval.current_class_context.clone();
-
+                let mut class_cursor = self.class_definitions
+                    .get(&class_name)
+                    .cloned();
                 while let Some(class_def) = class_cursor.clone() {
                     if let Statement::Class { fields, .. } = &class_def.statement
                         && let Some((i, (var, _vis))) = fields
                             .iter()
                             .enumerate()
-                            .find(|(_, (f, _))| f.name == field)
+                            .find(|(_, (f, _))| {
+                                f.name == field
+                            })
                     {
                         found = Some((i, var.clone(), class_def.clone()));
                         break;
@@ -2497,7 +2509,7 @@ impl LLVM {
         self.prologue
             .push("declare i32 @printf(ptr, ...)   ;".to_string());
         self.scope.insert_top(
-            Register::new(Type::I32),
+            Register::new_var(Type::I32, "printf_result".to_string()),
             Variable {
                 name: "printf".to_string(),
                 var_type: Type::Function {
@@ -2511,7 +2523,7 @@ impl LLVM {
         self.prologue
             .push("declare i32 @scanf(ptr, ...)   ;".to_string());
         self.scope.insert_top(
-            Register::new(Type::I32),
+            Register::new_var(Type::I32, "scanf_result".to_string()),
             Variable {
                 name: "scanf".to_string(),
                 var_type: Type::Function {
@@ -2525,9 +2537,9 @@ impl LLVM {
         self.prologue
             .push("declare ptr @malloc(i64)  ;".to_string());
         self.scope.insert_top(
-            Register::new(Type::Pointer(Box::new(Type::I8))),
+            Register::new_var(Type::Pointer(Box::new(Type::I8)), "malloc".to_string()),
             Variable {
-                name: "malloc".to_string(),
+                name: "malloc_result".to_string(),
                 var_type: Type::Function {
                     name: "malloc".to_string(),
                     args: vec![Type::I64],
@@ -2538,7 +2550,7 @@ impl LLVM {
         );
         self.prologue.push("declare void @free(ptr)  ;".to_string());
         self.scope.insert_top(
-            Register::new(Type::Void),
+            Register::new_var(Type::Void, "free_result".to_string()),
             Variable {
                 name: "free".to_string(),
                 var_type: Type::Function {
