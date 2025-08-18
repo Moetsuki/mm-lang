@@ -83,7 +83,7 @@ impl SourceFile {
         let snippet = self.snippet(span);
         // Ensure at least one caret for empty spans; measure length in bytes
         let len = (span.hi - span.lo).max(1) as usize;
-        format!(
+        let res = format!(
             "{}:{}:{}:\n{}\n{}{}",
             self.name,
             line,
@@ -93,6 +93,8 @@ impl SourceFile {
             " ".repeat(col - 1),
             // Draw carets, but don't extend past the end of the snippet
             "^".repeat(len.min(snippet.len().saturating_sub(col - 1)))
-        )
+        );
+        println!("{}", res);
+        res
     }
 }

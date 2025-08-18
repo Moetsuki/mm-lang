@@ -4,6 +4,8 @@ use core::panic;
 
 use crate::backtrace;
 use crate::block::Block;
+use crate::file::{FileId, SourceFile};
+use crate::span::Span;
 use crate::statement::Visibility;
 use crate::types::Type;
 use crate::variable::Variable;
@@ -399,7 +401,7 @@ impl Display for StringData {
 /// LLVM
 ///
 #[allow(clippy::upper_case_acronyms)]
-pub struct LLVM {
+pub struct LLVM<'a> {
     forward_decls: IR,
     prologue: IR,
     main_prologue: IR,
@@ -407,7 +409,8 @@ pub struct LLVM {
     main_epilogue: IR,
     code: IR,
     epilogue: IR,
-    ast: Ast,
+    ast: Ast<'a>,
+    source: &'a SourceFile,
     scope: Scope,
     class_definitions: HashMap<String, Class>,
     struct_definitions: HashMap<String, Struct>,
@@ -416,8 +419,8 @@ pub struct LLVM {
     current_func_scope: Option<Box<Function>>,
 }
 
-impl LLVM {
-    pub fn new(ast: Ast) -> Self {
+impl<'a> LLVM<'a> {
+    pub fn new(ast: Ast<'a>, source: &'a SourceFile) -> Self {
         LLVM {
             forward_decls: IR::new(),
             prologue: IR::new(),
@@ -427,6 +430,7 @@ impl LLVM {
             main_epilogue: IR::new(),
             code: IR::new(),
             ast,
+            source,
             scope: Scope::new(),
             class_definitions: HashMap::new(),
             struct_definitions: HashMap::new(),
@@ -530,7 +534,7 @@ impl LLVM {
 
         for statement in statements {
             match statement {
-                Statement::Block { body } => {
+                Statement::Block { body, .. } => {
                     let result = self.transform_block(&body.statements);
 
                     if let Some(r) = result {
@@ -540,6 +544,7 @@ impl LLVM {
                 Statement::VariableDecl {
                     identifier: var_info,
                     value,
+                    span
                 } => {
                     let value_eval = self.transform_expression(value.clone());
                     eval.code
@@ -548,6 +553,9 @@ impl LLVM {
 
                     // println!("{{Statement::VariableDecl}}\n");
                     // println!("{:?}", statement.clone());
+
+                    println!("### Statement::VariableDecl");
+                    self.source.caret(*span);
 
                     // println!("  + [Identifier]");
                     // println!("      | [var_info]");
@@ -598,8 +606,12 @@ impl LLVM {
                 Statement::Assignment {
                     identifier: lhs,
                     value: rhs,
+                    span,
                 } => match lhs {
-                    Expression::Variable(_var_info) => {
+                    Expression::Variable{ var: var_info, .. } => {
+                        println!("### Statement::Assignment");
+                        self.source.caret(*span);
+
                         let rhs_eval = self.transform_expression(rhs.clone());
                         eval.code
                             .instructions
@@ -609,11 +621,6 @@ impl LLVM {
                         eval.code
                             .instructions
                             .extend(lhs_eval.code.instructions.clone());
-
-                        println!("lhs = {:?}", lhs);
-                        println!("rhs = {:?}", rhs);
-                        println!("rhs_eval = {:?}", rhs_eval.clone());
-                        println!("lhs_eval = {:?}", lhs_eval.clone());
 
                         // Handle type coercion if needed
                         let coerced_register =
@@ -640,7 +647,7 @@ impl LLVM {
 
                         // Check if it already exists in scope and replce the register with a new
                         // one that holds the result
-                        let mut res = self.scope.pop_by_name(&_var_info.name);
+                        let mut res = self.scope.pop_by_name(&var_info.name);
 
                         if let Some(r) = res.as_mut() {
                             r.0 = result_register.clone();
@@ -649,10 +656,13 @@ impl LLVM {
                         }
 
                         if res.is_none() {
-                            self.scope.insert(result_register, _var_info.clone());
+                            self.scope.insert(result_register, var_info.clone());
                         }
                     }
-                    Expression::FieldAccess { object: lhs, field } => {
+                    Expression::FieldAccess { object: lhs, field, .. } => {
+                        println!("### Statement::Assignment");
+                        self.source.caret(*span);
+
                         let object_eval = self.transform_expression(*lhs.clone());
 
                         // Ensure the object is a pointer type
@@ -754,7 +764,11 @@ impl LLVM {
                     condition,
                     then_block,
                     else_block,
+                    span,
                 } => {
+                    println!("### Statement::If");
+                    self.source.caret(*span);
+
                     let condition_eval = self.transform_expression(condition.clone());
                     eval.code
                         .instructions
@@ -814,7 +828,11 @@ impl LLVM {
                     ret_type,
                     params,
                     body,
+                    span,
                 } => {
+                    println!("### Statement::Function");
+                    self.source.caret(*span);
+
                     // Get LLVM types
                     let return_type_llvm = self.type_to_llvm(&ret_type.clone());
 
@@ -868,6 +886,7 @@ impl LLVM {
                             params: params.clone(),
                             ret_type: ret_type.clone(),
                             body: body.clone(),
+                            span: span.clone()
                         },
                         params.clone(),
                         ret_type.clone(),
@@ -931,9 +950,12 @@ impl LLVM {
                     eval.register = func_register.clone();
                     self.scope.insert_top(func_register.clone(), var_info);
                 }
-                Statement::Call { callee, args } => {
+                Statement::Call { callee, args, span } => {
+                    println!("### Statement::Call");
+                    self.source.caret(*span);
+                    
                     match callee {
-                        Expression::Variable(var_expr) => {
+                        Expression::Variable{ var: var_expr, .. } => {
                             //
                             // Get function and generate its signature for later use
                             //
@@ -1000,7 +1022,10 @@ impl LLVM {
                         }
                     }
                 }
-                Statement::Return { value } => {
+                Statement::Return { value, span } => {
+                    println!("### Statement::Return");
+                    self.source.caret(*span);
+
                     let return_eval = self.transform_expression(value.clone());
                     eval.code
                         .instructions
@@ -1048,10 +1073,13 @@ impl LLVM {
                     parent,
                     fields,
                     methods,
+                    span,
                 } => {
                     //
                     // Handle class transformation
                     //
+                    println!("### Statement::Class");
+                    self.source.caret(*span);
 
                     //
                     // NOTES:
@@ -1279,6 +1307,7 @@ impl LLVM {
                             ret_type,
                             params,
                             body,
+                            span
                         } = method.0.as_ref()
                         {
                             // Generate function signature
@@ -1331,6 +1360,7 @@ impl LLVM {
                                     params: params.clone(),
                                     ret_type: ret_type.clone(),
                                     body: body.clone(),
+                                    span: span.clone(),
                                 },
                                 params.clone(),   // args
                                 ret_type.clone(), // ret_type
@@ -1461,12 +1491,12 @@ impl LLVM {
         };
 
         match expr {
-            Expression::Number(value) => {
+            Expression::Number{value, ..} => {
                 eval.code
                     .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
             }
-            Expression::StringLiteral(value) => {
+            Expression::StringLiteral{value, ..} => {
                 let string_data = StringData::new(value);
 
                 self.prologue.push(format!(
@@ -1488,7 +1518,7 @@ impl LLVM {
 
                 eval.register.var_type = Type::String;
             }
-            Expression::Variable(var) => {
+            Expression::Variable{ var, .. } => { 
                 let var_symbol = self
                     .scope
                     .find_by_name(&var.name)
@@ -1496,18 +1526,12 @@ impl LLVM {
 
                 eval.register = var_symbol.0.clone();
             }
-            Expression::BinaryOp { op, left, right } => {
+            Expression::BinaryOp { op, left, right, span } => {
                 let left_eval = self.transform_expression(*left.clone());
                 let right_eval = self.transform_expression(*right.clone());
 
-                println!("Expression::BinaryOp");
-                println!("{{ {:?}, {:?}, {:?} }}",
-                    op.clone(),
-                    format!("{} __ {}", left_eval.clone().register.clone().name, self.type_to_llvm(&left_eval.clone().register.clone().var_type)),
-                    format!("{} __ {}", right_eval.clone().register.clone().name, self.type_to_llvm(&right_eval.clone().register.clone().var_type)),
-                );
-                println!("L: {:?}", left.clone());
-                println!("R: {:?}", right.clone());
+                println!(">>> Expression::BinaryOp");
+                self.source.caret(span);
 
                 eval.code
                     .instructions
@@ -1673,11 +1697,14 @@ impl LLVM {
                     }
                 }
             }
-            Expression::UnaryOp { op, expr } => {
+            Expression::UnaryOp { op, expr, span } => {
                 let inner_eval = self.transform_expression(*expr);
                 eval.code
                     .instructions
                     .extend(inner_eval.code.instructions);
+
+                println!(">>> Expression::UnaryOp");
+                self.source.caret(span);
 
                 match op.as_str() {
                     "-" => {
@@ -1718,7 +1745,10 @@ impl LLVM {
                     }
                 }
             }
-            Expression::Cast { expr, target_type } => {
+            Expression::Cast { expr, target_type, span } => {
+                println!(">>> Expression::Cast");
+                self.source.caret(span);
+
                 let inner_eval = self.transform_expression(*expr);
                 eval.code
                     .instructions
@@ -1799,7 +1829,11 @@ impl LLVM {
                 object,
                 method,
                 args: _args,
+                span
             } => {
+                println!(">>> Expression::MethodCall");
+                self.source.caret(span);
+
                 // println!(
                 //     "{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 //     format!("Expression::MethodCall"),
@@ -1813,7 +1847,7 @@ impl LLVM {
 
                 // Evaluate the base object (e.g., `self` or `this`)
                 let object_eval = match &*object {
-                    Expression::Variable(var) if var.name == "self" => {
+                    Expression::Variable{ var, .. } if var.name == "self" => {
                         // println!("------+ Expression::MethodCall -- `self` Specific Case");
 
                         // Ensure we are in a class scope
@@ -2042,10 +2076,13 @@ impl LLVM {
                     arg_string_all
                 ));
             }
-            Expression::FieldAccess { object, field } => {
+            Expression::FieldAccess { object, field, span } => {
+                println!(">>> Expression::FieldAccess");
+                self.source.caret(span);
+
                 // Evaluate the base object (e.g., `self` or `this`)
                 let object_eval = match &*object {
-                    Expression::Variable(var) if var.name == "self" => {
+                    Expression::Variable{ var, .. } if var.name == "self" => {
                         // Ensure we are in a class scope
                         let class_scope = self
                             .current_class_scope
@@ -2159,9 +2196,12 @@ impl LLVM {
                     eval.register = field_value_register;
                 }
             }
-            Expression::Call { callee, args } => {
+            Expression::Call { callee, args, span } => {
+                println!(">>> Expression::Call");
+                self.source.caret(span);
+
                 match *callee {
-                    Expression::Variable(var) => {
+                    Expression::Variable{ var, .. } => {
                         // Find the function in the current scope
                         let func = self.scope.find_by_name(&var.name);
 
@@ -2660,6 +2700,7 @@ impl LLVM {
                 params: vec![],
                 ret_type: Type::I32,
                 body: Block::new(vec![]),
+                span: Span::new(FileId(0), 0, 0)
             },
             vec![],    // args
             Type::I32, // ret_type

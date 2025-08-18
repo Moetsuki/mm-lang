@@ -20,6 +20,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tokenizer::tokenize;
 
+use crate::file::SourceFile;
+
 fn get_caller_name() -> Option<String> {
     let bt = Backtrace::force_capture();
 
@@ -61,7 +63,9 @@ fn process(
     expected_exit_code: Option<i32>,
     print_asm: bool,
 ) {
-    let mut tokens = tokenize(source);
+    let source_file = SourceFile::new("source.mm", source.to_string());
+
+    let mut tokens = tokenize(source, &source_file);
 
     let caller = get_caller_name().unwrap_or_else(|| "unknown".to_string());
     println!("Processing source code from: {}", caller);
@@ -74,13 +78,13 @@ fn process(
     //     println!("{:?}", token);
     // }
 
-    let mut ast = Ast::new(tokens);
+    let mut ast = Ast::new(tokens, &source_file);
 
     let _block = ast.parse();
 
     print_block(&_block, 0);
 
-    let mut llvm = llvm::LLVM::new(ast);
+    let mut llvm = llvm::LLVM::new(ast, &source_file);
 
     llvm.compile();
 
@@ -193,7 +197,7 @@ fn print_block(block: &block::Block, level: usize) {
     let ident_steps = 4;
     for statement in &block.statements {
         match statement {
-            Statement::Block { body } => {
+            Statement::Block { body, .. } => {
                 println!("{:indent$}Block {{", "", indent = level * ident_steps);
                 print_block(body, level + 1);
                 println!("{:indent$}}}", "", indent = level * ident_steps);
@@ -202,6 +206,7 @@ fn print_block(block: &block::Block, level: usize) {
                 condition,
                 then_block,
                 else_block,
+                ..
             } => {
                 println!(
                     "{:indent$}If condition: {:?}",

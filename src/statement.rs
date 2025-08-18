@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use crate::block::Block;
 use crate::expression::Expression;
+use crate::span::Span;
 use crate::variable::Variable;
 use crate::types::Type;
 
@@ -18,56 +19,81 @@ pub enum Statement {
     VariableDecl {
         identifier: Variable,
         value: Expression,
+        span: Span,
     },
     Assignment {
         identifier: Expression,
         value: Expression,
+        span: Span,
     },
     Call {
         callee: Expression,
         args: Vec<Expression>,
+        span: Span,
     },
     If {
         condition: Expression,
         then_block: Block,
         else_block: Option<Block>,
+        span: Span,
     },
     Function {
         name: String,
         ret_type: Type,
         params: Vec<Variable>,
         body: Block,
+        span: Span,
     },
     Block {
         body: Block,
+        span: Span,
     },
     Return {
         value: Expression,
+        span: Span,
     },
     Class {
         name: String,
         parent: Option<String>,
         fields: Vec<(Variable, Visibility)>,
         methods: Vec<(Box<Statement>, Visibility)>,
+        span: Span,
     },
     Struct {
         id: u64,
         name: String,
         parent: Option<Box<Statement>>,
         fields: Vec<Variable>,
+        span: Span,
     },
+}
+
+impl Statement {
+    pub fn span(&self) -> Span {
+        match self {
+            Statement::VariableDecl { span, .. } => *span,
+            Statement::Assignment { span, .. } => *span,
+            Statement::Call { span, .. } => *span,
+            Statement::If { span, .. } => *span,
+            Statement::Function { span, .. } => *span,
+            Statement::Block { span, .. } => *span,
+            Statement::Return { span, .. } => *span,
+            Statement::Class { span, .. } => *span,
+            Statement::Struct { span, .. } => *span,
+        }
+    }
 }
 
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let fmtstr = match self {
-            Statement::VariableDecl { identifier, value } => {
+            Statement::VariableDecl { identifier, value, .. } => {
                 format!("VariableDecl({}, {})", identifier.name, value)
             }
-            Statement::Assignment { identifier, value } => {
+            Statement::Assignment { identifier, value, .. } => {
                 format!("Assignment({}, {})", identifier, value)
             }
-            Statement::Call { callee, args } => {
+            Statement::Call { callee, args, .. } => {
                 format!(
                     "Call({}, [{}])",
                     callee,
@@ -81,11 +107,12 @@ impl Display for Statement {
                 condition,
                 then_block,
                 else_block,
+                ..
             } => format!(
                 "If(condition: {}, then: {}, else: {:?})",
                 condition, then_block, else_block
             ),
-            Statement::Function { name, ret_type, params, body } => format!(
+            Statement::Function { name, ret_type, params, body, .. } => format!(
                 "Function(name: {}, ret_type: {}, params: [{}], body: {})",
                 name,
                 ret_type,
@@ -95,9 +122,9 @@ impl Display for Statement {
                     .join(", "),
                 body
             ),
-            Statement::Block { body } => format!("Block({})", body),
-            Statement::Return { value } => format!("Return({})", value),
-            Statement::Class { name, parent, fields, methods } => {
+            Statement::Block { body, .. } => format!("Block({})", body),
+            Statement::Return { value, .. } => format!("Return({})", value),
+            Statement::Class { name, parent, fields, methods, .. } => {
                 let fields_str = fields.iter()
                     .map(|(var, vis)| format!("{}: {} ({:?})", var.name, var.var_type, vis))
                     .collect::<Vec<_>>()
@@ -108,7 +135,7 @@ impl Display for Statement {
                     .join(", ");
                 format!("Class(name: {}, parent: {:?}, fields: [{}], methods: [{}])", name, parent, fields_str, methods_str)
             }
-            Statement::Struct { id, name, parent, fields } => {
+            Statement::Struct { id, name, parent, fields, .. } => {
                 let parent_str = if let Some(p) = parent {
                     format!(" extends {}", p)
                 } else {

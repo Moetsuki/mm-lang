@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::fmt::Display;
 
+use crate::span::Span;
 use crate::statement::Statement;
 
 static BLOCK_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -15,6 +16,15 @@ impl Block {
     pub fn new(statements: Vec<Statement>) -> Self {
         let id = BLOCK_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         Block { id, statements }
+    }
+    pub fn span(&self) -> Option<Span> {
+        if self.statements.is_empty() {
+            None
+        } else {
+            let first_span = self.statements.first().unwrap().span();
+            let last_span = self.statements.last().unwrap().span();
+            Some(first_span.join(last_span))
+        }
     }
 }
 

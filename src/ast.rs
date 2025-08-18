@@ -1,5 +1,7 @@
 use crate::block::Block;
 use crate::expression::Expression;
+use crate::file::SourceFile;
+use crate::span::Span;
 use crate::statement::Statement;
 use crate::statement::Visibility;
 use crate::tokenizer::LexicalToken;
@@ -9,18 +11,20 @@ use crate::types::Type;
 use crate::variable::Variable;
 use std::str::FromStr;
 
-pub struct Ast {
+pub struct Ast<'a> {
     tokens: Vec<LexicalToken>,
     pos: usize,
     tree: Option<Block>,
+    source_file: &'a SourceFile,
 }
 
-impl Ast {
-    pub fn new(tokens: Vec<LexicalToken>) -> Self {
+impl<'a> Ast<'a> {
+    pub fn new(tokens: Vec<LexicalToken>, source_file: &'a SourceFile) -> Self {
         Ast {
             tokens,
             pos: 0,
             tree: None,
+            source_file,
         }
     }
 
@@ -79,6 +83,7 @@ impl Ast {
         let mut statements = Vec::new();
 
         while let Some(lexical_token) = self.next_token() {
+            let lexical_token_span = lexical_token.span;
             match &lexical_token.token {
                 //
                 // Handle Identifiers:
@@ -118,7 +123,8 @@ impl Ast {
                                             let expr = self.parse_expr();
                                             statements.push(Statement::VariableDecl {
                                                 identifier: var_info,
-                                                value: expr,
+                                                value: expr.clone(),
+                                                span: lexical_token_span.join(expr.span()),
                                             });
                                         }
                                         _ => {
@@ -138,11 +144,15 @@ impl Ast {
                                 self.expect_operator();
                                 let expr = self.parse_expr();
                                 statements.push(Statement::Assignment {
-                                    identifier: Expression::Variable(Variable {
-                                        name: name_clone,
-                                        var_type: Type::ToBeEvaluated("invalid".to_string()),
-                                    }),
-                                    value: expr,
+                                    identifier: Expression::Variable {
+                                        var: Variable {
+                                            name: name_clone,
+                                            var_type: Type::ToBeEvaluated("invalid".to_string()),
+                                        },
+                                        span: expr.span().join(lexical_token_span),
+                                    },
+                                    value: expr.clone(),
+                                    span: lexical_token_span.join(expr.span()),
                                 });
                             }
                             //
@@ -150,10 +160,13 @@ impl Ast {
                             //
                             Token::Punctuation(p) if p == "(" => {
                                 // Handle function call case
-                                let callee = Expression::Variable(Variable {
-                                    name: name_clone,
-                                    var_type: Type::ToBeEvaluated("invalid".to_string()),
-                                });
+                                let callee = Expression::Variable {
+                                    var: Variable {
+                                        name: name_clone,
+                                        var_type: Type::ToBeEvaluated("invalid".to_string()),
+                                    },
+                                    span: lexical_token_span,
+                                };
                                 let call_statement = self.parse_call(callee);
                                 statements.push(call_statement);
                             }
@@ -170,24 +183,37 @@ impl Ast {
                                 // If this is an assignment to a field (e.g., self.id = expr;)
                                 if let Some(next) = self.peek_token()
                                     && let Token::Operator(op) = &next.token
-                                        && op == "=" {
-                                            self.next_token(); // consume '='
-                                            let rhs = self.parse_expr();
-                                            statements.push(Statement::Assignment {
-                                                identifier: lhs,
-                                                value: rhs,
-                                            });
-                                            continue;
-                                        }
+                                    && op == "="
+                                {
+                                    self.next_token(); // consume '='
+                                    let rhs = self.parse_expr();
+                                    statements.push(Statement::Assignment {
+                                        identifier: lhs,
+                                        value: rhs.clone(),
+                                        span: lexical_token_span.join(rhs.span())
+                                    });
+                                    continue;
+                                }
 
                                 // Not an assignment; at this point we might have a pure method call like obj.method(...);
                                 match lhs {
                                     // If it's a function-style call like foo(...), turn it into a Call statement.
-                                    Expression::Call { callee, args } => {
-                                        statements.push(Statement::Call { callee: *callee, args });
+                                    Expression::Call { callee, args, .. } => {
+                                        let total_span = if args.is_empty() {
+                                            lexical_token_span
+                                        } else {
+                                            lexical_token_span.join(args.last().unwrap().span())
+                                        };
+                                        statements.push(Statement::Call {
+                                            callee: *callee,
+                                            args,
+                                            span: total_span,
+                                        });
                                     }
                                     Expression::MethodCall { .. } => {
-                                        panic!("Method call statements are not yet supported at this point. Consider adding Statement::MethodCall or lowering to Call on a field access.");
+                                        panic!(
+                                            "Method call statements are not yet supported at this point. Consider adding Statement::MethodCall or lowering to Call on a field access."
+                                        );
                                     }
                                     other => {
                                         panic!(
@@ -207,8 +233,11 @@ impl Ast {
                 Token::Keyword(keyword) if keyword == "if" => {
                     // Make sure we can handle nested if statements
                     let condition = self.parse_expr();
+                    
+                    let mut total_span = lexical_token_span;
                     self.expect(&Token::Punctuation("{".to_string()));
                     let then_block = self.parse();
+                    total_span = then_block.span().unwrap_or(total_span).join(total_span);
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
                     let else_block = if let Some(lexical_token) = self.peek_token() {
                         if lexical_token.token == Token::Keyword("else".to_string()) {
@@ -216,6 +245,7 @@ impl Ast {
                             self.expect(&Token::Punctuation("{".to_string()));
                             let else_block = self.parse();
                             self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+                            total_span = total_span.join(else_block.span().unwrap_or(total_span));
                             Some(else_block)
                         } else {
                             None
@@ -223,10 +253,12 @@ impl Ast {
                     } else {
                         None
                     };
+
                     statements.push(Statement::If {
                         condition,
                         then_block,
                         else_block,
+                        span: total_span,
                     });
                 }
                 Token::Keyword(keyword) if keyword == "function" => {
@@ -237,8 +269,9 @@ impl Ast {
                     //
                     // Handle return statements
                     //
+                    let total_span = lexical_token_span;
                     let expr = self.parse_expr();
-                    statements.push(Statement::Return { value: expr });
+                    statements.push(Statement::Return { value: expr.clone(), span: total_span.join(expr.span()) });
                 }
                 Token::Keyword(keyword) if keyword == "class" => {
                     //
@@ -385,6 +418,7 @@ impl Ast {
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
+                                    span: Span::new(lexical_token_span.file, 0, 0)
                                 }),
                                 Visibility::Public,
                             ),
@@ -401,6 +435,7 @@ impl Ast {
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
+                                    span: Span::new(lexical_token_span.file, 0, 0)
                                 }),
                                 Visibility::Public,
                             ),
@@ -409,11 +444,20 @@ impl Ast {
 
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
+                    let total_span = {
+                        if let Some(peek_tok) = self.peek_token() {
+                            peek_tok.span.clone().join(lexical_token_span)
+                        } else {
+                            lexical_token_span
+                        }
+                    };
+
                     statements.push(Statement::Class {
                         name: class_name,
                         parent: parent_class,
                         fields,
                         methods,
+                        span: total_span,
                     });
 
                     self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
@@ -440,7 +484,7 @@ impl Ast {
 
                     self.expect(&Token::Punctuation("}".to_string()));
 
-                    statements.push(Statement::Block { body: block });
+                    statements.push(Statement::Block { body: block.clone(), span: block.span().unwrap_or(lexical_token_span) });
                 }
                 _ => {
                     //
@@ -484,8 +528,15 @@ impl Ast {
     fn parse_call(&mut self, callee: Expression) -> Statement {
         self.expect(&Token::Punctuation("(".to_string()));
         let args = self.parse_args();
+        let total_span = {
+            if let Some(peek_tok) = self.peek_token() {
+                peek_tok.span.clone().join(callee.span())
+            } else {
+                callee.span()
+            }
+        };
         self.expect(&Token::Punctuation(")".to_string()));
-        Statement::Call { callee, args }
+        Statement::Call { callee, args, span: total_span }
     }
 
     // Parses a list of arguments for a function call
@@ -527,11 +578,15 @@ impl Ast {
     // Handles literals and identifiers
     fn parse_factor(&mut self) -> Expression {
         if let Some(lexical_token) = self.peek_token() {
+            let lexical_token_span = lexical_token.span;
             match &lexical_token.token {
                 Token::Number(n) => {
                     let value = *n;
                     self.next_token();
-                    Expression::Number(value)
+                    Expression::Number {
+                        value,
+                        span: lexical_token_span,
+                    }
                 }
                 Token::Operator(p) if p == "-" => {
                     self.next_token(); // consume the unary minus operator
@@ -539,7 +594,10 @@ impl Ast {
                     if let Some(next_tok) = next_tok {
                         match &next_tok.token {
                             Token::Number(n) => {
-                                let result = Expression::Number(-(*n));
+                                let result = Expression::Number {
+                                    value: -(*n),
+                                    span: lexical_token_span.join(next_tok.span),
+                                };
                                 self.next_token(); // consume the number
                                 result
                             }
@@ -547,7 +605,8 @@ impl Ast {
                                 let operand = self.parse_factor();
                                 Expression::UnaryOp {
                                     op: "-".to_string(),
-                                    expr: Box::new(operand),
+                                    expr: Box::new(operand.clone()),
+                                    span: lexical_token_span.join(operand.span()),
                                 }
                             }
                         }
@@ -558,15 +617,21 @@ impl Ast {
                 Token::StringLiteral(s) => {
                     let value = s.clone();
                     self.next_token();
-                    Expression::StringLiteral(value)
+                    Expression::StringLiteral {
+                        value,
+                        span: lexical_token_span,
+                    }
                 }
                 Token::Identifier(name) => {
                     let name_clone = name.clone();
                     self.next_token();
-                    Expression::Variable(Variable {
-                        name: name_clone,
-                        var_type: Type::ToBeEvaluated("invalid".to_string()),
-                    })
+                    Expression::Variable {
+                        var: Variable {
+                            name: name_clone,
+                            var_type: Type::ToBeEvaluated("invalid".to_string()),
+                        },
+                        span: lexical_token_span,
+                    }
                 }
                 Token::Punctuation(p) if p == "(" => {
                     self.next_token();
@@ -601,6 +666,8 @@ impl Ast {
                             );
                         };
 
+                        let tok_span = tok.span;
+
                         // Determine if this is a method call (next token is '(') or a field access
                         let is_method_call = matches!(
                             self.peek_token(),
@@ -613,14 +680,21 @@ impl Ast {
                             let args = self.parse_args();
                             self.expect(&Token::Punctuation(")".to_string()));
                             expr = Expression::MethodCall {
-                                object: Box::new(expr),
+                                object: Box::new(expr.clone()),
                                 method: member_name,
-                                args,
+                                args: args.clone(),
+                                span: expr.span().join(
+                                    args.iter()
+                                        .map(|arg| arg.span())
+                                        .reduce(|a, b| a.join(b))
+                                        .unwrap_or(expr.span().join(tok_span)),
+                                ),
                             };
                         } else {
                             expr = Expression::FieldAccess {
-                                object: Box::new(expr),
+                                object: Box::new(expr.clone()),
                                 field: member_name,
+                                span: expr.span().join(tok_span),
                             };
                         }
                     } else {
@@ -633,8 +707,14 @@ impl Ast {
                     let args = self.parse_args();
                     self.expect(&Token::Punctuation(")".to_string()));
                     expr = Expression::Call {
-                        callee: Box::new(expr),
-                        args,
+                        callee: Box::new(expr.clone()),
+                        args: args.clone(),
+                        span: expr.span().join(
+                            args.iter()
+                                .map(|arg| arg.span())
+                                .reduce(|a, b| a.join(b))
+                                .unwrap_or(expr.span()),
+                        ),
                     };
                 }
                 _ => break,
@@ -662,8 +742,9 @@ impl Ast {
                         let rhs = self.parse_additive();
                         expr = Expression::BinaryOp {
                             op,
-                            left: Box::new(expr),
-                            right: Box::new(rhs),
+                            left: Box::new(expr.clone()),
+                            right: Box::new(rhs.clone()),
+                            span: expr.span().join(rhs.span()),
                         };
                         continue;
                     }
@@ -681,17 +762,19 @@ impl Ast {
 
         while let Some(tok) = self.peek_token() {
             if let Token::Operator(op) = &tok.token
-                && (op == "+" || op == "-") {
-                    let op = op.clone();
-                    self.next_token();
-                    let rhs = self.parse_term();
-                    expr = Expression::BinaryOp {
-                        op,
-                        left: Box::new(expr),
-                        right: Box::new(rhs),
-                    };
-                    continue;
-                }
+                && (op == "+" || op == "-")
+            {
+                let op = op.clone();
+                self.next_token();
+                let rhs = self.parse_term();
+                expr = Expression::BinaryOp {
+                    op,
+                    left: Box::new(expr.clone()),
+                    right: Box::new(rhs.clone()),
+                    span: expr.span().join(rhs.span()),
+                };
+                continue;
+            }
             break;
         }
 
@@ -706,11 +789,12 @@ impl Ast {
                 if op == "*" || op == "/" {
                     let op = op.clone();
                     self.next_token();
-                    let rhs = self.parse_cast(); 
+                    let rhs = self.parse_cast();
                     expr = Expression::BinaryOp {
                         op,
-                        left: Box::new(expr),
-                        right: Box::new(rhs),
+                        left: Box::new(expr.clone()),
+                        right: Box::new(rhs.clone()),
+                        span: expr.span().join(rhs.span()),
                     };
                 } else {
                     break;
@@ -729,12 +813,14 @@ impl Ast {
 
         while let Some(lexical_token) = self.peek_token() {
             if let Token::Keyword(keyword) = &lexical_token.token {
+                let lexical_token_span = lexical_token.span;
                 if keyword == "as" {
                     self.next_token(); // consume 'as'
                     let target_type = self.parse_type();
                     expr = Expression::Cast {
-                        expr: Box::new(expr),
+                        expr: Box::new(expr.clone()),
                         target_type,
+                        span: expr.span().join(lexical_token_span),
                     };
                 } else {
                     break;
@@ -749,9 +835,9 @@ impl Ast {
 
     // Parses a function definition
     fn parse_function(&mut self) -> Statement {
-        let name = if let Some(lexical_token) = self.next_token() {
+        let (name, _lexical_token_span) = if let Some(lexical_token) = self.next_token() {
             if let Token::Identifier(name) = &lexical_token.token {
-                name.clone()
+                (name.clone(), lexical_token.span)
             } else {
                 panic!(
                     "Expected function name, found {:?} at line {}, column {}",
@@ -778,6 +864,15 @@ impl Ast {
         }
         self.expect(&Token::Punctuation("{".to_string()));
         let body = self.parse();
+
+        let total_span = {
+            if let Some(peek_tok) = self.peek_token() {
+                peek_tok.span.clone().join(_lexical_token_span)
+            } else {
+                _lexical_token_span
+            }
+        };
+
         self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
         Statement::Function {
@@ -785,6 +880,7 @@ impl Ast {
             ret_type,
             params,
             body,
+            span: total_span,
         }
     }
 
@@ -792,13 +888,13 @@ impl Ast {
         let mut is_constructor;
         let mut is_destructor;
 
-        let name = if let Some(lexical_token) = self.next_token() {
+        let (name, lexical_token_span) = if let Some(lexical_token) = self.next_token() {
             if let Token::Keyword(keyword) = &lexical_token.token {
                 is_constructor = keyword == "init";
                 is_destructor = keyword == "destroy";
 
                 if is_constructor || is_destructor {
-                    format!("__{}_{}", class_name, keyword)
+                    (format!("__{}_{}", class_name, keyword), lexical_token.span.clone())
                 } else {
                     panic!(
                         "Expected 'init' or 'destroy', found {:?} at line {}, column {}",
@@ -829,6 +925,13 @@ impl Ast {
 
         self.expect(&Token::Punctuation("{".to_string()));
         let body = self.parse();
+        let total_span = {
+            if let Some(peek_tok) = self.peek_token() {
+                peek_tok.span.clone().join(lexical_token_span)
+            } else {
+                lexical_token_span
+            }
+        };
         self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
         Statement::Function {
@@ -836,6 +939,7 @@ impl Ast {
             ret_type: Type::Void, // Constructors and destructors do not return a value
             params,
             body,
+            span: total_span,
         }
     }
 

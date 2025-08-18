@@ -113,20 +113,34 @@ pub fn tokenize_line(
 
     let mut token = String::new();
 
+    // Track the absolute byte offset where the current token started
+    let mut token_start: Option<usize> = None;
+
     let mut column = 0;
     for ch in line_string.chars() {
         column += 1;
         *cursor += 1;
 
+        // When starting a new token, remember its starting byte (cursor already advanced by ch)
+        if !inside_string && token.is_empty() {
+            token_start = Some(*cursor - ch.len_utf8());
+        }
+
         ///////////////////
         // String literals
         ///////////////////
         if ch == '"' {
+            if !inside_string && token.is_empty() {
+                // opening quote is the first char of this token
+                token_start = Some(*cursor - ch.len_utf8());
+            }
+
             inside_string = !inside_string;
             if !inside_string {
                 // If we are closing a string, end it and push the token
                 token.push(ch);
-                let tok_len = token.len();
+                let start = token_start.take().unwrap();
+                let end = start + token.len();
                 emit(
                     &mut token,
                     &mut tokens,
@@ -134,8 +148,8 @@ pub fn tokenize_line(
                     column,
                     Span::new(
                         source_file.id,
-                        cursor.saturating_sub(tok_len),
-                        *cursor,
+                        start,
+                        end,
                     ),
                 );
             }
@@ -160,11 +174,12 @@ pub fn tokenize_line(
 
                 // Whitespace forces a token to be emitted
                 // Emit the current token if it's not empty
-                let tok_len = token.len();
+                let start = token_start.take().unwrap();
+                let end = start + token.len();
                 emit(&mut token, &mut tokens, line, column, Span::new(
                     source_file.id,
-                    cursor.saturating_sub(tok_len),
-                    *cursor,
+                    start,
+                    end,
                 ));
             }
 
@@ -176,9 +191,13 @@ pub fn tokenize_line(
                     // If we have two slashes, it is a comment
                     // so we skip the rest of the line
                     token.clear();
+                    token_start = None;
                     break;
                 } else {
                     matched_slash = true;
+                    if token.is_empty() {
+                        token_start = Some(*cursor - ch.len_utf8());
+                    }
                     token.push(ch);
                 }
             }
@@ -196,22 +215,24 @@ pub fn tokenize_line(
                     // Single-character operators or punctuation
                     /////////////////////////////////////////////
 
-                    // If it is, emit the current token and push the operator or punctuation
-                    let tok_len = token.len();
+                    // First, emit any pending identifier/number token
+                    let start = token_start.take().unwrap();
+                    let end = start + token.len();
                     emit(&mut token, &mut tokens, line, column, Span::new(
                         source_file.id,
-                        cursor.saturating_sub(tok_len),
-                        *cursor,
+                        start,
+                        end,
                     ));
-
                     
+                    // Then emit the single-character operator/punctuation itself
+                    let op_start = *cursor - ch.len_utf8();
                     tokens.push(LexicalToken {
                         token: conv(String::from(ch)),
                         line,
                         column,
                         span: Span::new(
                             source_file.id,
-                            cursor.saturating_sub(ch.len_utf8()),
+                            op_start,
                             *cursor,
                         ),
                     });
@@ -224,12 +245,12 @@ pub fn tokenize_line(
                     if tokens.len() >= 2 {
                         let last_last = &tokens[tokens.len() - 2];
                         let last = tokens.last().unwrap();
-
                         let last_str = format!("{}{}", last_last.token, last.token);
 
                         if OPERATORS.contains(&last_str.as_str())
                             || PUNCTUATION.contains(&last_str.as_str())
                         {
+                            let merged_start = last_last.span.lo as usize;
                             tokens.pop(); // Remove the last token
                             tokens.pop(); // Remove the second last token
                             tokens.push(LexicalToken {
@@ -238,8 +259,8 @@ pub fn tokenize_line(
                                 column,
                                 span: Span::new(
                                     source_file.id,
-                                    cursor.saturating_sub(last_str.len()),
-                                    *cursor,
+                                    merged_start,
+                                    merged_start + last_str.len(),
                                 )
                             }); // Push the combined token
                         }
@@ -253,6 +274,9 @@ pub fn tokenize_line(
                 ///////////////////////////
 
                 // If we reach here, it means we are still building an identifier/number token
+                if token.is_empty() {
+                    token_start = Some(*cursor - ch.len_utf8());
+                }
                 token.push(ch);
             }
         }
@@ -260,14 +284,16 @@ pub fn tokenize_line(
 
     // Emit the last token if it's not empty
     if !token.is_empty() {
+        let start = token_start.take().unwrap_or((*cursor).saturating_sub(token.len()));
+        let end = start + token.len();
         tokens.push(LexicalToken {
             token: conv(token.clone()),
             line,
             column,
             span: Span::new(
                 source_file.id,
-                cursor.saturating_sub(token.len()),
-                *cursor,
+                start,
+                end,
             ),
         });
     }
@@ -279,19 +305,18 @@ pub fn tokenize_line(
         column,
         span: Span::new(
             source_file.id,
-            cursor.saturating_sub(1),
             *cursor,
+            *cursor + 1,
         )
     });
+    *cursor += 1;
 
     tokens
 }
 
-pub fn tokenize(source: &str) -> Vec<LexicalToken> {
+pub fn tokenize(source: &str, source_file: &SourceFile) -> Vec<LexicalToken> {
     // Step 1: Split lines
     let lines: Vec<&str> = source.lines().collect();
-
-    let source_file = SourceFile::new("source.mm", source.to_string());
 
     let mut cursor: usize = 0;
 
