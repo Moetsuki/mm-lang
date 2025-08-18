@@ -9,6 +9,8 @@ mod tokenizer;
 mod types;
 mod variable;
 mod backtrace;
+mod span;
+mod file;
 
 use ast::Ast;
 use statement::Statement;

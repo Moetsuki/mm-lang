@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::{file::SourceFile, span::Span};
+
 pub const PUNCTUATION: [&str; 11] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->"];
 
 pub const OPERATORS: [&str; 12] = [
@@ -7,11 +9,25 @@ pub const OPERATORS: [&str; 12] = [
 ];
 
 pub const KEYWORDS: [&str; 19] = [
-    "if", "else", "while", "for", "function", "return", "as", 
-    "object", "class", "entity", "component", "system", 
-    "static", "dynamic", 
-    "public", "private", "protected",
-    "init", "destroy"
+    "if",
+    "else",
+    "while",
+    "for",
+    "function",
+    "return",
+    "as",
+    "object",
+    "class",
+    "entity",
+    "component",
+    "system",
+    "static",
+    "dynamic",
+    "public",
+    "private",
+    "protected",
+    "init",
+    "destroy",
 ];
 
 #[derive(Debug, Clone)]
@@ -19,6 +35,7 @@ pub struct LexicalToken {
     pub token: Token,
     pub line: usize,
     pub column: usize,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,18 +80,30 @@ pub fn conv(token: String) -> Token {
     }
 }
 
-pub fn emit(token: &mut String, tokens: &mut Vec<LexicalToken>, line: usize, column: usize) {
+pub fn emit(
+    token: &mut String,
+    tokens: &mut Vec<LexicalToken>,
+    line: usize,
+    column: usize,
+    span: Span,
+) {
     if !token.is_empty() {
         tokens.push(LexicalToken {
             token: conv(token.clone()),
             line,
             column,
+            span,
         });
         token.clear();
     }
 }
 
-pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
+pub fn tokenize_line(
+    line_string: &str,
+    line: usize,
+    source_file: &SourceFile,
+    cursor: &mut usize,
+) -> Vec<LexicalToken> {
     // Step 1: Read character by character
     let mut tokens = Vec::<LexicalToken>::new();
 
@@ -87,6 +116,7 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
     let mut column = 0;
     for ch in line_string.chars() {
         column += 1;
+        *cursor += 1;
 
         ///////////////////
         // String literals
@@ -96,7 +126,18 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
             if !inside_string {
                 // If we are closing a string, end it and push the token
                 token.push(ch);
-                emit(&mut token, &mut tokens, line, column);
+                let tok_len = token.len();
+                emit(
+                    &mut token,
+                    &mut tokens,
+                    line,
+                    column,
+                    Span::new(
+                        source_file.id,
+                        cursor.saturating_sub(tok_len),
+                        *cursor,
+                    ),
+                );
             }
         }
 
@@ -119,7 +160,12 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
 
                 // Whitespace forces a token to be emitted
                 // Emit the current token if it's not empty
-                emit(&mut token, &mut tokens, line, column);
+                let tok_len = token.len();
+                emit(&mut token, &mut tokens, line, column, Span::new(
+                    source_file.id,
+                    cursor.saturating_sub(tok_len),
+                    *cursor,
+                ));
             }
 
             /////////////////////////
@@ -151,11 +197,23 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
                     /////////////////////////////////////////////
 
                     // If it is, emit the current token and push the operator or punctuation
-                    emit(&mut token, &mut tokens, line, column);
+                    let tok_len = token.len();
+                    emit(&mut token, &mut tokens, line, column, Span::new(
+                        source_file.id,
+                        cursor.saturating_sub(tok_len),
+                        *cursor,
+                    ));
+
+                    
                     tokens.push(LexicalToken {
                         token: conv(String::from(ch)),
                         line,
                         column,
+                        span: Span::new(
+                            source_file.id,
+                            cursor.saturating_sub(ch.len_utf8()),
+                            *cursor,
+                        ),
                     });
 
                     ////////////////////////////////////////////
@@ -167,8 +225,7 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
                         let last_last = &tokens[tokens.len() - 2];
                         let last = tokens.last().unwrap();
 
-                        let last_str =
-                            format!("{}{}", last_last.token, last.token);
+                        let last_str = format!("{}{}", last_last.token, last.token);
 
                         if OPERATORS.contains(&last_str.as_str())
                             || PUNCTUATION.contains(&last_str.as_str())
@@ -176,9 +233,14 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
                             tokens.pop(); // Remove the last token
                             tokens.pop(); // Remove the second last token
                             tokens.push(LexicalToken {
-                                token: conv(last_str),
+                                token: conv(last_str.clone()),
                                 line,
                                 column,
+                                span: Span::new(
+                                    source_file.id,
+                                    cursor.saturating_sub(last_str.len()),
+                                    *cursor,
+                                )
                             }); // Push the combined token
                         }
                     }
@@ -202,6 +264,11 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
             token: conv(token.clone()),
             line,
             column,
+            span: Span::new(
+                source_file.id,
+                cursor.saturating_sub(token.len()),
+                *cursor,
+            ),
         });
     }
 
@@ -210,6 +277,11 @@ pub fn tokenize_line(line_string: &str, line: usize) -> Vec<LexicalToken> {
         token: Token::Newline,
         line,
         column,
+        span: Span::new(
+            source_file.id,
+            cursor.saturating_sub(1),
+            *cursor,
+        )
     });
 
     tokens
@@ -219,12 +291,14 @@ pub fn tokenize(source: &str) -> Vec<LexicalToken> {
     // Step 1: Split lines
     let lines: Vec<&str> = source.lines().collect();
 
-    // Step 2: Tokenize each line
-    
+    let source_file = SourceFile::new("source.mm", source.to_string());
 
+    let mut cursor: usize = 0;
+
+    // Step 2: Tokenize each line
     lines
         .iter()
         .enumerate()
-        .flat_map(|(line, line_str)| tokenize_line(line_str, line))
+        .flat_map(|(line, line_str)| tokenize_line(line_str, line, &source_file, &mut cursor))
         .collect()
 }
