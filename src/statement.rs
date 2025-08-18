@@ -82,6 +82,19 @@ impl Statement {
             Statement::Struct { span, .. } => *span,
         }
     }
+    pub fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Statement::VariableDecl { span, .. } => span,
+            Statement::Assignment { span, .. } => span,
+            Statement::Call { span, .. } => span,
+            Statement::If { span, .. } => span,
+            Statement::Function { span, .. } => span,
+            Statement::Block { span, .. } => span,
+            Statement::Return { span, .. } => span,
+            Statement::Class { span, .. } => span,
+            Statement::Struct { span, .. } => span,
+        }
+    }
 }
 
 impl Display for Statement {

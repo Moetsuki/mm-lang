@@ -886,7 +886,7 @@ impl<'a> LLVM<'a> {
                             params: params.clone(),
                             ret_type: ret_type.clone(),
                             body: body.clone(),
-                            span: span.clone()
+                            span: *span
                         },
                         params.clone(),
                         ret_type.clone(),
@@ -1360,7 +1360,7 @@ impl<'a> LLVM<'a> {
                                     params: params.clone(),
                                     ret_type: ret_type.clone(),
                                     body: body.clone(),
-                                    span: span.clone(),
+                                    span: *span,
                                 },
                                 params.clone(),   // args
                                 ret_type.clone(), // ret_type

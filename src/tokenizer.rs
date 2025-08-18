@@ -116,6 +116,9 @@ pub fn tokenize_line(
     // Track the absolute byte offset where the current token started
     let mut token_start: Option<usize> = None;
 
+    // Track where this line starts in the global cursor
+    let line_start_cursor = *cursor;
+
     let mut column = 0;
     for ch in line_string.chars() {
         column += 1;
@@ -192,6 +195,12 @@ pub fn tokenize_line(
                     // so we skip the rest of the line
                     token.clear();
                     token_start = None;
+
+                    // Advance cursor and column to the end of the kine so spans stay correct
+                    let remaining = *cursor - line_start_cursor - 1;
+                    *cursor += remaining;
+                    column = line_string.chars().count();
+
                     break;
                 } else {
                     matched_slash = true;
@@ -324,6 +333,6 @@ pub fn tokenize(source: &str, source_file: &SourceFile) -> Vec<LexicalToken> {
     lines
         .iter()
         .enumerate()
-        .flat_map(|(line, line_str)| tokenize_line(line_str, line, &source_file, &mut cursor))
+        .flat_map(|(line, line_str)| tokenize_line(line_str, line, source_file, &mut cursor))
         .collect()
 }

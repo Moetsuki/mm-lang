@@ -68,6 +68,21 @@ impl Expression {
             Expression::FieldAccess { span, .. } => *span,
         }
     }
+
+    pub fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Expression::Variable { span, .. } => span,
+            Expression::Number { span, .. } => span,
+            Expression::StringLiteral { span, .. } => span,
+            Expression::Boolean { span, .. } => span,
+            Expression::Cast { span, .. } => span,
+            Expression::BinaryOp { span, .. } => span,
+            Expression::UnaryOp { span, .. } => span,
+            Expression::Call { span, .. } => span,
+            Expression::MethodCall { span, .. } => span,
+            Expression::FieldAccess { span, .. } => span,
+        }
+    }
 }
 
 impl Display for Expression {

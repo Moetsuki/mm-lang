@@ -55,7 +55,7 @@ impl<'a> Ast<'a> {
         }
     }
 
-    pub fn expect(&mut self, expected: &Token) {
+    pub fn expect(&mut self, expected: &Token) -> Span {
         if let Some(lexical_token) = self.next_token().as_ref() {
             if &lexical_token.token != expected {
                 panic!(
@@ -63,6 +63,7 @@ impl<'a> Ast<'a> {
                     expected, lexical_token.token, lexical_token.line, lexical_token.column
                 );
             }
+            lexical_token.span
         } else {
             panic!("Expected {:?}, but no more tokens available", expected);
         }
@@ -262,16 +263,17 @@ impl<'a> Ast<'a> {
                     });
                 }
                 Token::Keyword(keyword) if keyword == "function" => {
-                    let stm = self.parse_function();
+                    let mut stm = self.parse_function();
+                    let sp = stm.span().join(lexical_token_span);
+                    *stm.span_mut() = sp;
                     statements.push(stm);
                 }
                 Token::Keyword(keyword) if keyword == "return" => {
                     //
                     // Handle return statements
                     //
-                    let total_span = lexical_token_span;
                     let expr = self.parse_expr();
-                    statements.push(Statement::Return { value: expr.clone(), span: total_span.join(expr.span()) });
+                    statements.push(Statement::Return { value: expr.clone(), span: lexical_token_span.join(expr.span()) });
                 }
                 Token::Keyword(keyword) if keyword == "class" => {
                     //
@@ -446,7 +448,7 @@ impl<'a> Ast<'a> {
 
                     let total_span = {
                         if let Some(peek_tok) = self.peek_token() {
-                            peek_tok.span.clone().join(lexical_token_span)
+                            peek_tok.span.join(lexical_token_span)
                         } else {
                             lexical_token_span
                         }
@@ -530,7 +532,7 @@ impl<'a> Ast<'a> {
         let args = self.parse_args();
         let total_span = {
             if let Some(peek_tok) = self.peek_token() {
-                peek_tok.span.clone().join(callee.span())
+                peek_tok.span.join(callee.span())
             } else {
                 callee.span()
             }
@@ -635,8 +637,9 @@ impl<'a> Ast<'a> {
                 }
                 Token::Punctuation(p) if p == "(" => {
                     self.next_token();
-                    let expr = self.parse_expr();
-                    self.expect(&Token::Punctuation(")".to_string()));
+                    let mut expr = self.parse_expr();
+                    let tok_span = self.expect(&Token::Punctuation(")".to_string()));
+                    *expr.span_mut() = lexical_token_span.join(tok_span);
                     expr
                 }
                 other => panic!("Unexpected token: {:?}", other),
@@ -816,11 +819,16 @@ impl<'a> Ast<'a> {
                 let lexical_token_span = lexical_token.span;
                 if keyword == "as" {
                     self.next_token(); // consume 'as'
+                    let token_span = if let Some(next_tok) = self.peek_token() {
+                        next_tok.span
+                    } else {
+                        lexical_token_span
+                    };
                     let target_type = self.parse_type();
                     expr = Expression::Cast {
                         expr: Box::new(expr.clone()),
                         target_type,
-                        span: expr.span().join(lexical_token_span),
+                        span: expr.span().join(token_span),
                     };
                 } else {
                     break;
@@ -867,7 +875,7 @@ impl<'a> Ast<'a> {
 
         let total_span = {
             if let Some(peek_tok) = self.peek_token() {
-                peek_tok.span.clone().join(_lexical_token_span)
+                peek_tok.span.join(_lexical_token_span)
             } else {
                 _lexical_token_span
             }
@@ -894,7 +902,7 @@ impl<'a> Ast<'a> {
                 is_destructor = keyword == "destroy";
 
                 if is_constructor || is_destructor {
-                    (format!("__{}_{}", class_name, keyword), lexical_token.span.clone())
+                    (format!("__{}_{}", class_name, keyword), lexical_token.span)
                 } else {
                     panic!(
                         "Expected 'init' or 'destroy', found {:?} at line {}, column {}",
@@ -927,7 +935,7 @@ impl<'a> Ast<'a> {
         let body = self.parse();
         let total_span = {
             if let Some(peek_tok) = self.peek_token() {
-                peek_tok.span.clone().join(lexical_token_span)
+                peek_tok.span.join(lexical_token_span)
             } else {
                 lexical_token_span
             }
