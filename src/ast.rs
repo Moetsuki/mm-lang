@@ -158,30 +158,43 @@ impl Ast {
                                 statements.push(call_statement);
                             }
                             //
-                            // Method call case:
+                            // Method call or field access case (e.g., self.id = x; or obj.method(...);)
                             //
                             Token::Punctuation(p) if p == "." => {
-                                // Backtrack to the identifier token
+                                // Backtrack to the identifier token to parse the full lhs (e.g., self.id)
                                 self.backtrack();
 
-                                // Parse expression
-                                let expr = self.parse_expr();
+                                // Parse the full postfix expression (handles chained . and calls)
+                                let lhs = self.parse_postfix();
 
-                                // If its a BinaryOp =, we emit an Assignment statement
-                                if let Expression::BinaryOp { op, left, right } = expr {
-                                    if op == "=" {
-                                        statements.push(Statement::Assignment {
-                                            identifier: *left,
-                                            value: *right,
-                                        });
-                                    } else {
+                                // If this is an assignment to a field (e.g., self.id = expr;)
+                                if let Some(next) = self.peek_token()
+                                    && let Token::Operator(op) = &next.token
+                                        && op == "=" {
+                                            self.next_token(); // consume '='
+                                            let rhs = self.parse_expr();
+                                            statements.push(Statement::Assignment {
+                                                identifier: lhs,
+                                                value: rhs,
+                                            });
+                                            continue;
+                                        }
+
+                                // Not an assignment; at this point we might have a pure method call like obj.method(...);
+                                match lhs {
+                                    // If it's a function-style call like foo(...), turn it into a Call statement.
+                                    Expression::Call { callee, args } => {
+                                        statements.push(Statement::Call { callee: *callee, args });
+                                    }
+                                    Expression::MethodCall { .. } => {
+                                        panic!("Method call statements are not yet supported at this point. Consider adding Statement::MethodCall or lowering to Call on a field access.");
+                                    }
+                                    other => {
                                         panic!(
-                                            "Unexpected binary operator `{}` in method call context",
-                                            op
+                                            "Unexpected expression after '.', expected assignment or call, found {:?}",
+                                            other
                                         );
                                     }
-                                } else {
-                                    panic!("Expected a BinaryOp for method call, found {:?}", expr);
                                 }
                             }
                             Token::Identifier(_) => {
