@@ -240,24 +240,59 @@ impl<'a> Ast<'a> {
                     let then_block = self.parse();
                     total_span = then_block.span().unwrap_or(total_span).join(total_span);
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-                    let else_block = if let Some(lexical_token) = self.peek_token() {
+                    
+                    let mut elif: Vec<Box<Statement>> = vec![];
+
+                    // We return the else block if available and push all `else if` blocks into the 
+                    // vector above to deduplicate logic.
+                    let mut else_block : Option<Block> = None;
+
+                    while let Some(lexical_token) = self.peek_token() {
                         if lexical_token.token == Token::Keyword("else".to_string()) {
                             self.next_token(); // consume 'else'
-                            self.expect(&Token::Punctuation("{".to_string()));
-                            let else_block = self.parse();
-                            self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-                            total_span = total_span.join(else_block.span().unwrap_or(total_span));
-                            Some(else_block)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
 
-                    statements.push(Statement::If {
+                            println!("dsd");
+
+                            // Check if we have an else_if statement
+                            let (is_elif, else_if_cond) = if let Some(lexical_token_2) = self.peek_token() 
+                                && lexical_token_2.token == Token::Keyword("if".to_string()) {
+                                self.next_token(); // consume 'if'
+                                (true, Some(self.parse_expr()))
+                            } else {
+                                (false, None)
+                            };
+
+                            // Parse the else - else_if block
+                            self.expect(&Token::Punctuation("{".to_string()));
+                            let else_elif_block = self.parse();
+                            self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
+
+
+                            let sub_total_span = total_span.join(else_elif_block.span().unwrap_or(total_span));
+
+                            if is_elif {
+                                elif.push(Box::new(Statement::If{
+                                    condition: else_if_cond.unwrap(),
+                                    then_block: else_elif_block,
+                                    elif: vec![],
+                                    else_block: None,
+                                    span: sub_total_span
+                                }));
+                                continue; // continue parsing for more else else_if blocks
+                            }
+
+                            total_span = sub_total_span;
+                            else_block = Some(else_elif_block);
+
+                            break; // found else block, finished ---- don't allow else_if statemtns after else
+                        }
+                        break; // no more else blocks to parse
+                };
+
+                statements.push(Statement::If {
                         condition,
                         then_block,
+                        elif,
                         else_block,
                         span: total_span,
                     });

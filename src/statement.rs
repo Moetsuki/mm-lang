@@ -34,6 +34,7 @@ pub enum Statement {
     If {
         condition: Expression,
         then_block: Block,
+        elif: Vec<Box<Statement>>,
         else_block: Option<Block>,
         span: Span,
     },
@@ -119,11 +120,12 @@ impl Display for Statement {
             Statement::If {
                 condition,
                 then_block,
+                elif,
                 else_block,
                 ..
             } => format!(
-                "If(condition: {}, then: {}, else: {:?})",
-                condition, then_block, else_block
+                "If(condition: {},\nthen: {},elif: {:?}\nelse: {:?})",
+                condition, then_block, elif, else_block
             ),
             Statement::Function { name, ret_type, params, body, .. } => format!(
                 "Function(name: {}, ret_type: {}, params: [{}], body: {})",

@@ -761,47 +761,172 @@ impl<'a> LLVM<'a> {
                 Statement::If {
                     condition,
                     then_block,
+                    elif,
                     else_block,
                     span,
                 } => {
+                    // ------------------------------------------------------------ //
+                    // expr1             if expr1 then >--+                         //
+                    // jnz stm1-label                     |                         //
+                    //                                    |                         //
+                    // !! fall-thru !!                    |                         //
+                    //                                    |                         //
+                    // expr2          elif expr2 then >-------+                     //
+                    // jnz stm2-label                     |   |                     //
+                    //                                    |   |                     //
+                    // !! fall-thru !!                    |   |                     //
+                    //                                    |   |                     //
+                    // expr3          elif expr3 then >-----------+                 //
+                    // jnz stm3-label                     |   |   |                 //
+                    //                                    |   |   |                 //
+                    // !! fall-thru !!                    |   |   |                 //
+                    //                                    |   |   |                 //
+                    // stm4                               |   |   |                 //
+                    // jmp done-label                     |   |   |                 //
+                    //                                    |   |   |                 //
+                    // stm2             <---------------------+   |                 //
+                    // jmp done-label                     |       |                 //
+                    //                                    |       |                 //
+                    // stm3             <-------------------------+                 //
+                    // jmp done-label                     |                         //
+                    //                                    |                         //
+                    // stm1             <-----------------+                         //
+                    // done                                                         //
+                    // ------------------------------------------------------------ //
+
                     println!("### Statement::If");
                     self.source.caret(*span);
+ 
+                    // Path return analysis
+                    let all_paths_return = self.all_paths_return(&then_block.statements)
+                        && elif.iter().all(|e| {
+                            if let Statement::If { then_block, .. } = e.as_ref() {
+                                self.all_paths_return(&then_block.statements)
+                            } else {
+                                false
+                            }
+                        })
+                        && else_block
+                            .as_ref()
+                            .map_or(true, |b| self.all_paths_return(&b.statements))
+                        && else_block.is_some();
 
-                    let condition_eval = self.transform_expression(condition.clone());
-                    eval.code
-                        .instructions
-                        .extend(condition_eval.code.instructions);
+                    println!("all_paths_return: {}", all_paths_return);
 
                     // Create labels
                     let true_label = format!("if_true_{}", eval.register.id);
                     let false_label = format!("if_false_{}", eval.register.id);
                     let done_label = format!("if_done_{}", eval.register.id);
+                    let mut elif_labels : Vec<String> = elif
+                        .iter()
+                        .enumerate()
+                        .map(|(i,_)| format!("if_elif_{}_{}", i, eval.register.id))
+                        .collect();
 
-                    // Analyze return behavior of branches
-                    let then_returns = self.all_paths_return(&then_block.statements);
-                    let else_returns = else_block
-                        .as_ref()
-                        .map(|eb| self.all_paths_return(&eb.statements))
-                        .unwrap_or(false);
+                    println!("elif_labels: {:?}", elif_labels);
 
-                    // Compare condition with zero
+                    // ---------------------//
+                    // Generate fallthru br //
+                    // -------------------- //
+                    //      condition       //
+                    //         (+)          //
+                    //    jnz case_label    //
+                    //         (+)          //
+                    //       fallthru       //
+                    // -------------------- //
+
+                    // Try `if` condition
+                    let condition_eval = self.transform_expression(condition.clone());
+                    eval.code
+                        .instructions
+                        .extend(condition_eval.code.instructions);
                     let cmp_register = Register::new(Type::Bool);
                     eval.code.push(format!(
                         "%{} = icmp ne i1 %{}, 0",
                         cmp_register, condition_eval.register
                     ));
-
-                    // Branch based on comparison
                     eval.code.push(format!(
                         "br i1 %{}, label %{}, label %{}",
                         cmp_register,
                         true_label,
-                        if else_block.is_some() {
-                            &false_label
-                        } else {
-                            &done_label
-                        }
+                        format!("if_fallthrough_{}", eval.register.id)
                     ));
+                    eval.code.push(format!("if_fallthrough_{}:", eval.register.id));
+
+                    // Try `else if` conditions, falling through sequentially
+                    elif.iter().zip(elif_labels.iter()).enumerate().for_each(|(i, (e, label))| {
+                        match e.as_ref() {
+                           Statement::If{ condition, .. } => { 
+                                let cond = self.transform_expression(condition.clone());
+                                eval.code
+                                    .instructions
+                                    .extend(cond.code.instructions);
+
+                                // Compare condition with zero
+                                let cmp_reg = Register::new(Type::Bool);
+                                eval.code.push(format!(
+                                    "%{} = icmp ne i1 %{}, 0",
+                                    cmp_reg, cond.register
+                                ));
+
+                                // Branch based on comparison
+                                eval.code.push(format!(
+                                    "br i1 %{}, label %{}, label %{}",
+                                    cmp_reg,
+                                    label,
+                                    format!("else_{}_fallthrough_{}", i, eval.register.id)
+                                ));
+                                eval.code.push(format!("else_{}_fallthrough_{}:", i, eval.register.id));
+                            }
+                            _ => panic!("Unsupported statement, expected `else if` got {:?}", *e),
+                        }
+                    });
+
+                    // We hit nothing, so jump to `else` label
+                    eval.code.push(format!("br label %{}", false_label));
+
+                    // ---------------------//
+                    // Generate case blocks //
+                    // -------------------- //
+                    //     case_label:      //
+                    //         (+)          //
+                    //     <statements>     //
+                    //         (+)          //
+                    //    jump done_label   //
+                    // -------------------- //
+
+                    // TODO `jump done_label` is not needed if all branches of the <statements>
+                    // block return a value. Check with self.all_paths_return(..)
+
+                    // Else if blocks
+                    elif.iter().zip(elif_labels.iter()).for_each(|(e, label)| {
+                        match e.as_ref() {
+                            Statement::If{ then_block, .. } => {
+                                eval.code.push(format!("{}:", label));
+                                let else_elseif_eval = self
+                                    .transform_block(&then_block.statements.clone())
+                                    .expect("Failed to compile else/else_if block");
+                                eval.code.instructions.extend(else_elseif_eval.code.instructions);
+                                if !all_paths_return {
+                                    eval.code.push(format!("br label %{}", done_label));
+                                }
+                            }
+                            _ => panic!("Unsupported statement, expected `else if` got {:?}", *e),
+                        }
+                    });
+
+                    // Else block
+                    eval.code.push(format!("{}:", false_label));
+                    if let Some(else_block) = else_block {
+                        let else_eval = self
+                            .transform_block(&else_block.statements)
+                            .expect("Failed to compile else-statements block");
+                        eval.code.instructions.extend(else_eval.code.instructions);
+                    }
+                    if !all_paths_return {
+                        eval.code.push(format!("br label %{}", done_label));
+                    }
+                    
 
                     // True block
                     eval.code.push(format!("{}:", true_label));
@@ -809,27 +934,11 @@ impl<'a> LLVM<'a> {
                         .transform_block(&then_block.statements)
                         .expect("Failed to compile true-statements block");
                     eval.code.instructions.extend(then_eval.code.instructions);
-                    if !then_returns {
+                    if !all_paths_return {
                         eval.code.push(format!("br label %{}", done_label));
                     }
 
-                    // False block (if exists)
-                    if let Some(else_block) = else_block {
-                        eval.code.push(format!("{}:", false_label));
-                        let else_eval = self
-                            .transform_block(&else_block.statements)
-                            .expect("Failed to compile false-statements block");
-                        eval.code.instructions.extend(else_eval.code.instructions);
-                        if !else_returns {
-                            eval.code.push(format!("br label %{}", done_label));
-                        }
-                    }
-
-                    // Done label only if at least one path falls through
-                    if !then_returns
-                        || (!else_returns && else_block.is_some())
-                        || else_block.is_none()
-                    {
+                    if !all_paths_return {
                         eval.code.push(format!("{}:", done_label));
                     }
                 }

@@ -551,3 +551,93 @@ fn test_fibonacci() {
     "#;
     process(source, None, Some(55), false);
 }
+
+#[test]
+fn test_if_else_elseif() {
+    let source = r#"
+    x : i64 = 5;
+    y : i64 = -2;
+
+    if x + y == 0 {
+        return 1;
+    } else if x + y > 0 {
+        return 2;
+    } else {
+        return 3;
+    }
+
+    return -1;
+    "#;
+    process(source, None, Some(2), false);
+}
+
+#[test]
+fn test_if_ex() {
+    let source = r#"
+    x: i64 = 5;
+    y: i64 = 10;
+
+    if x < y {
+        return 1;
+    }
+
+    return 2;
+    "#;
+    process(source, None, Some(1), false);
+}
+
+#[test]
+fn test_if_else() {
+    let source = r#"
+    x: i64 = 5;
+    y: i64 = 10;
+
+    if x > y {
+        return 5;
+    } else {
+        return 6;
+    }
+
+    return 7;
+    "#;
+    process(source, None, Some(6), false);
+}
+
+#[test]
+fn test_if_nx() {
+    let source = r#"
+    x: i64 = 5;
+    y: i64 = 10;
+
+    if x > y {
+        return 5;
+    }
+
+    return 7;
+    "#;
+    process(source, None, Some(7), false);
+}
+
+#[test]
+fn test_if_else_elseif_2() {
+    let source = r#"
+    x : i64 = 5;
+    y : i64 = -2;
+    z : i64 = 100;
+
+    if x + y == 0 {
+        return 1;
+    } else if x + y < 0 {
+        return 2;
+    } else if z == 99 {
+        return 33;
+    } else if z == 100 {
+        return 44;
+    } else {
+        return 3;
+    }
+
+    return -1;
+    "#;
+    process(source, None, Some(44), false);
+}
