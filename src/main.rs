@@ -526,3 +526,28 @@ fn test_simple_constructor() {
     "#;
     process(source, None, None, false);
 }
+
+#[test]
+fn test_arithmetic_expression() {
+    let source = r#"
+    result: i64 = (((5 + 3) * 2 - 4 / 2) + 1) * 2;
+    return result; // Should return 30
+    "#;
+    process(source, None, Some(30), false);
+}
+
+#[test]
+fn test_fibonacci() {
+    let source = r#"
+    function fib(n: i32) -> i32 {
+        if n <= 1 {
+            return n;
+        } else {
+            return fib(n - 1) + fib(n - 2);
+        }
+    }
+
+    return fib(10); // Should return 55
+    "#;
+    process(source, None, Some(55), false);
+}

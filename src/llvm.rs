@@ -544,7 +544,7 @@ impl<'a> LLVM<'a> {
                 Statement::VariableDecl {
                     identifier: var_info,
                     value,
-                    span
+                    span,
                 } => {
                     let value_eval = self.transform_expression(value.clone());
                     eval.code
@@ -608,7 +608,7 @@ impl<'a> LLVM<'a> {
                     value: rhs,
                     span,
                 } => match lhs {
-                    Expression::Variable{ var: var_info, .. } => {
+                    Expression::Variable { var: var_info, .. } => {
                         println!("### Statement::Assignment");
                         self.source.caret(*span);
 
@@ -659,7 +659,9 @@ impl<'a> LLVM<'a> {
                             self.scope.insert(result_register, var_info.clone());
                         }
                     }
-                    Expression::FieldAccess { object: lhs, field, .. } => {
+                    Expression::FieldAccess {
+                        object: lhs, field, ..
+                    } => {
                         println!("### Statement::Assignment");
                         self.source.caret(*span);
 
@@ -667,9 +669,7 @@ impl<'a> LLVM<'a> {
 
                         // Ensure the object is a pointer type
                         if let Type::Pointer(inner_type) = object_eval.register.clone().var_type {
-                            eval.code
-                                .instructions
-                                .extend(object_eval.code.instructions);
+                            eval.code.instructions.extend(object_eval.code.instructions);
 
                             // Get the class or struct name from the inner type
                             let object_name = if let Type::Class { name, .. } = *inner_type {
@@ -716,9 +716,7 @@ impl<'a> LLVM<'a> {
 
                             // Calculate rhs of the assignment
                             let rhs_eval = self.transform_expression(rhs.clone());
-                            eval.code
-                                .instructions
-                                .extend(rhs_eval.code.instructions);
+                            eval.code.instructions.extend(rhs_eval.code.instructions);
 
                             // Handle type coercion if needed
                             let coerced_register =
@@ -779,6 +777,13 @@ impl<'a> LLVM<'a> {
                     let false_label = format!("if_false_{}", eval.register.id);
                     let done_label = format!("if_done_{}", eval.register.id);
 
+                    // Analyze return behavior of branches
+                    let then_returns = self.all_paths_return(&then_block.statements);
+                    let else_returns = else_block
+                        .as_ref()
+                        .map(|eb| self.all_paths_return(&eb.statements))
+                        .unwrap_or(false);
+
                     // Compare condition with zero
                     let cmp_register = Register::new(Type::Bool);
                     eval.code.push(format!(
@@ -803,10 +808,10 @@ impl<'a> LLVM<'a> {
                     let then_eval = self
                         .transform_block(&then_block.statements)
                         .expect("Failed to compile true-statements block");
-                    eval.code
-                        .instructions
-                        .extend(then_eval.code.instructions);
-                    eval.code.push(format!("br label %{}", done_label));
+                    eval.code.instructions.extend(then_eval.code.instructions);
+                    if !then_returns {
+                        eval.code.push(format!("br label %{}", done_label));
+                    }
 
                     // False block (if exists)
                     if let Some(else_block) = else_block {
@@ -814,14 +819,19 @@ impl<'a> LLVM<'a> {
                         let else_eval = self
                             .transform_block(&else_block.statements)
                             .expect("Failed to compile false-statements block");
-                        eval.code
-                            .instructions
-                            .extend(else_eval.code.instructions);
-                        eval.code.push(format!("br label %{}", done_label));
+                        eval.code.instructions.extend(else_eval.code.instructions);
+                        if !else_returns {
+                            eval.code.push(format!("br label %{}", done_label));
+                        }
                     }
 
-                    // Done label
-                    eval.code.push(format!("{}:", done_label));
+                    // Done label only if at least one path falls through
+                    if !then_returns
+                        || (!else_returns && else_block.is_some())
+                        || else_block.is_none()
+                    {
+                        eval.code.push(format!("{}:", done_label));
+                    }
                 }
                 Statement::Function {
                     name,
@@ -852,6 +862,21 @@ impl<'a> LLVM<'a> {
                     // Set up function scope
                     self.scope.enter_scope();
 
+                    // Register function in global scope before compiling body (enables recursion)
+                    if *ret_type != Type::ToBeEvaluated("".to_string()) {
+                        let func_var_info = Variable {
+                            name: name.clone(),
+                            var_type: Type::Function {
+                                name: name.clone(),
+                                args: params.iter().map(|p| p.var_type.clone()).collect(),
+                                ret_type: Box::new(ret_type.clone()),
+                                is_variadic: false,
+                            },
+                        };
+                        let func_register = Register::new(ret_type.clone());
+                        self.scope.insert_top(func_register, func_var_info);
+                    }
+
                     // Add parameters to scope
                     for param in params {
                         let param_register = Register::new(param.var_type.clone());
@@ -866,15 +891,9 @@ impl<'a> LLVM<'a> {
                         ));
                     }
 
-                    // If return type is not Void
-                    // Make sure the first level of statements have a return statement
-                    if ret_type != &Type::Void
-                        && !body
-                            .statements
-                            .iter()
-                            .any(|s| matches!(s, Statement::Return { .. }))
-                    {
-                        panic!("Function '{}' must have a return statement", name);
+                    // Ensure non-void functions return on all control-flow paths
+                    if *ret_type != Type::Void && !self.all_paths_return(&body.statements) {
+                        panic!("Function '{}' must return a value on all paths", name);
                     }
 
                     // Set function to current context
@@ -886,7 +905,7 @@ impl<'a> LLVM<'a> {
                             params: params.clone(),
                             ret_type: ret_type.clone(),
                             body: body.clone(),
-                            span: *span
+                            span: *span,
                         },
                         params.clone(),
                         ret_type.clone(),
@@ -899,9 +918,10 @@ impl<'a> LLVM<'a> {
 
                     self.enter_main(); // Clear function context
 
-                    // Check the body_eval register, if we don't have a match
-                    // We need to fix the last instruction.
-                    if body_eval.register.var_type != *ret_type {
+                    // If there is a fallthrough path with last value, ensure it matches ret type;
+                    // If all paths return, skip this coercion.
+                    let body_all_paths_return = self.all_paths_return(&body.statements);
+                    if !body_all_paths_return && body_eval.register.var_type != *ret_type {
                         // Make sure the last instruction of the epilogue is a ret
                         if let Some(last) = body_eval.code.instructions.last()
                             && !last.starts_with("ret")
@@ -929,41 +949,30 @@ impl<'a> LLVM<'a> {
                         ));
                     }
 
-                    self.code
-                        .instructions
-                        .extend(body_eval.code.instructions);
+                    self.code.instructions.extend(body_eval.code.instructions);
                     self.code.push("}".to_string());
 
                     self.scope.exit_scope();
 
-                    // Register function in global scope
-                    let var_info = Variable {
-                        name: name.clone(),
-                        var_type: Type::Function {
-                            name: name.clone(),
-                            args: params.iter().map(|p| p.var_type.clone()).collect(),
-                            ret_type: Box::new(ret_type.clone()),
-                            is_variadic: false,
-                        },
-                    };
-                    let func_register = Register::new(ret_type.clone());
-                    eval.register = func_register.clone();
-                    self.scope.insert_top(func_register.clone(), var_info);
+                    // No need to re-register function in global scope here; already inserted before body
                 }
                 Statement::Call { callee, args, span } => {
                     println!("### Statement::Call");
                     self.source.caret(*span);
-                    
+
                     match callee {
-                        Expression::Variable{ var: var_expr, .. } => {
+                        Expression::Variable { var: var_expr, .. } => {
                             //
                             // Get function and generate its signature for later use
                             //
                             let func_name = var_expr.name.clone();
-                            let func_var =
-                                self.scope.find_function(&func_name).unwrap_or_else(|| {
+                            let func_var = self
+                                .scope
+                                .find_function(&func_name)
+                                .unwrap_or_else(|| {
                                     panic!("Function '{}' not found in global scope", func_name)
-                                }).clone();
+                                })
+                                .clone();
                             let func_sig = self.generate_function_signature(
                                 func_var.name.clone(),
                                 &func_var.var_type.clone(),
@@ -1004,7 +1013,10 @@ impl<'a> LLVM<'a> {
                             //
                             // Create a new register to store the result
                             //
-                            eval.register = Register::new_var(*ret_type, format!("{}_result", func_name.clone()));
+                            eval.register = Register::new_var(
+                                *ret_type,
+                                format!("{}_result", func_name.clone()),
+                            );
 
                             //
                             // Call the function
@@ -1027,9 +1039,7 @@ impl<'a> LLVM<'a> {
                     self.source.caret(*span);
 
                     let return_eval = self.transform_expression(value.clone());
-                    eval.code
-                        .instructions
-                        .extend(return_eval.code.instructions);
+                    eval.code.instructions.extend(return_eval.code.instructions);
 
                     // Get return type from current function context
                     let expected_ret_type = self
@@ -1307,7 +1317,7 @@ impl<'a> LLVM<'a> {
                             ret_type,
                             params,
                             body,
-                            span
+                            span,
                         } = method.0.as_ref()
                         {
                             // Generate function signature
@@ -1491,12 +1501,12 @@ impl<'a> LLVM<'a> {
         };
 
         match expr {
-            Expression::Number{value, ..} => {
+            Expression::Number { value, .. } => {
                 eval.code
                     .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
             }
-            Expression::StringLiteral{value, ..} => {
+            Expression::StringLiteral { value, .. } => {
                 let string_data = StringData::new(value);
 
                 self.prologue.push(format!(
@@ -1518,7 +1528,7 @@ impl<'a> LLVM<'a> {
 
                 eval.register.var_type = Type::String;
             }
-            Expression::Variable{ var, .. } => { 
+            Expression::Variable { var, .. } => {
                 let var_symbol = self
                     .scope
                     .find_by_name(&var.name)
@@ -1526,19 +1536,20 @@ impl<'a> LLVM<'a> {
 
                 eval.register = var_symbol.0.clone();
             }
-            Expression::BinaryOp { op, left, right, span } => {
+            Expression::BinaryOp {
+                op,
+                left,
+                right,
+                span,
+            } => {
                 let left_eval = self.transform_expression(*left.clone());
                 let right_eval = self.transform_expression(*right.clone());
 
                 println!(">>> Expression::BinaryOp");
                 self.source.caret(span);
 
-                eval.code
-                    .instructions
-                    .extend(left_eval.code.instructions);
-                eval.code
-                    .instructions
-                    .extend(right_eval.code.instructions);
+                eval.code.instructions.extend(left_eval.code.instructions);
+                eval.code.instructions.extend(right_eval.code.instructions);
 
                 // Determine the result type (promote to larger type)
                 let result_type = self.determine_binary_op_result_type(
@@ -1551,21 +1562,13 @@ impl<'a> LLVM<'a> {
 
                 // Convert operands to result type if needed
                 let left_converted = if left_eval.register.var_type != result_type {
-                    self.insert_type_conversion(
-                        &mut eval.code,
-                        &left_eval.register,
-                        &result_type,
-                    )
+                    self.insert_type_conversion(&mut eval.code, &left_eval.register, &result_type)
                 } else {
                     left_eval.register
                 };
 
                 let right_converted = if right_eval.register.var_type != result_type {
-                    self.insert_type_conversion(
-                        &mut eval.code,
-                        &right_eval.register,
-                        &result_type,
-                    )
+                    self.insert_type_conversion(&mut eval.code, &right_eval.register, &result_type)
                 } else {
                     right_eval.register
                 };
@@ -1670,10 +1673,7 @@ impl<'a> LLVM<'a> {
                     "==" => {
                         eval.code.push(format!(
                             "%{} = icmp eq {} %{}, %{}",
-                            eval.register,
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
+                            eval.register, result_llvm_type, left_converted, right_converted
                         ));
 
                         eval.register.var_type = Type::Bool;
@@ -1681,10 +1681,7 @@ impl<'a> LLVM<'a> {
                     "!=" => {
                         eval.code.push(format!(
                             "%{} = icmp ne {} %{}, %{}",
-                            eval.register,
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
+                            eval.register, result_llvm_type, left_converted, right_converted
                         ));
 
                         eval.register.var_type = Type::Bool;
@@ -1699,9 +1696,7 @@ impl<'a> LLVM<'a> {
             }
             Expression::UnaryOp { op, expr, span } => {
                 let inner_eval = self.transform_expression(*expr);
-                eval.code
-                    .instructions
-                    .extend(inner_eval.code.instructions);
+                eval.code.instructions.extend(inner_eval.code.instructions);
 
                 println!(">>> Expression::UnaryOp");
                 self.source.caret(span);
@@ -1745,14 +1740,16 @@ impl<'a> LLVM<'a> {
                     }
                 }
             }
-            Expression::Cast { expr, target_type, span } => {
+            Expression::Cast {
+                expr,
+                target_type,
+                span,
+            } => {
                 println!(">>> Expression::Cast");
                 self.source.caret(span);
 
                 let inner_eval = self.transform_expression(*expr);
-                eval.code
-                    .instructions
-                    .extend(inner_eval.code.instructions);
+                eval.code.instructions.extend(inner_eval.code.instructions);
 
                 let source_type = &inner_eval.register.llvm_type();
                 let target_llvm = self.type_to_llvm(&target_type);
@@ -1829,7 +1826,7 @@ impl<'a> LLVM<'a> {
                 object,
                 method,
                 args: _args,
-                span
+                span,
             } => {
                 println!(">>> Expression::MethodCall");
                 self.source.caret(span);
@@ -1847,7 +1844,7 @@ impl<'a> LLVM<'a> {
 
                 // Evaluate the base object (e.g., `self` or `this`)
                 let object_eval = match &*object {
-                    Expression::Variable{ var, .. } if var.name == "self" => {
+                    Expression::Variable { var, .. } if var.name == "self" => {
                         // println!("------+ Expression::MethodCall -- `self` Specific Case");
 
                         // Ensure we are in a class scope
@@ -2016,7 +2013,11 @@ impl<'a> LLVM<'a> {
 
                 // Set the evaluation register to be the method's return type
                 eval.register.var_type = method_ret.clone();
-                eval.register.name = format!("{}_{}_result", class_name.clone().to_lowercase(), method.clone());
+                eval.register.name = format!(
+                    "{}_{}_result",
+                    class_name.clone().to_lowercase(),
+                    method.clone()
+                );
 
                 // Load method from vtable by index
                 let method_ptr_ptr = Register::new_var(
@@ -2049,9 +2050,7 @@ impl<'a> LLVM<'a> {
                 for arg in _args {
                     let arg = arg.clone();
                     let arg_eval = self.transform_expression(arg);
-                    eval.code
-                        .instructions
-                        .extend(arg_eval.code.instructions);
+                    eval.code.instructions.extend(arg_eval.code.instructions);
                     arg_registers.push(arg_eval.register);
                 }
 
@@ -2076,13 +2075,17 @@ impl<'a> LLVM<'a> {
                     arg_string_all
                 ));
             }
-            Expression::FieldAccess { object, field, span } => {
+            Expression::FieldAccess {
+                object,
+                field,
+                span,
+            } => {
                 println!(">>> Expression::FieldAccess");
                 self.source.caret(span);
 
                 // Evaluate the base object (e.g., `self` or `this`)
                 let object_eval = match &*object {
-                    Expression::Variable{ var, .. } if var.name == "self" => {
+                    Expression::Variable { var, .. } if var.name == "self" => {
                         // Ensure we are in a class scope
                         let class_scope = self
                             .current_class_scope
@@ -2112,12 +2115,10 @@ impl<'a> LLVM<'a> {
                     _ => self.transform_expression(*object),
                 };
 
-                eval.code
-                    .instructions
-                    .extend(object_eval.code.instructions);
+                eval.code.instructions.extend(object_eval.code.instructions);
 
                 // Ensure the object is a pointer to a class
-                let (_class_type,class_name) = match &object_eval.register.var_type {
+                let (_class_type, class_name) = match &object_eval.register.var_type {
                     Type::Pointer(inner_type) => match &**inner_type {
                         Type::Class { name, .. } => (self.get_class_type(name), name.clone()),
                         _ => panic!("Field access on non-class pointer"),
@@ -2127,17 +2128,13 @@ impl<'a> LLVM<'a> {
 
                 // Walk class hierarchy to find the field and remember which class owns it
                 let mut found: Option<(usize, Variable, Class)> = None;
-                let mut class_cursor = self.class_definitions
-                    .get(&class_name)
-                    .cloned();
+                let mut class_cursor = self.class_definitions.get(&class_name).cloned();
                 while let Some(class_def) = class_cursor.clone() {
                     if let Statement::Class { fields, .. } = &class_def.statement
                         && let Some((i, (var, _vis))) = fields
                             .iter()
                             .enumerate()
-                            .find(|(_, (f, _))| {
-                                f.name == field
-                            })
+                            .find(|(_, (f, _))| f.name == field)
                     {
                         found = Some((i, var.clone(), class_def.clone()));
                         break;
@@ -2201,7 +2198,7 @@ impl<'a> LLVM<'a> {
                 self.source.caret(span);
 
                 match *callee {
-                    Expression::Variable{ var, .. } => {
+                    Expression::Variable { var, .. } => {
                         // Find the function in the current scope
                         let func = self.scope.find_by_name(&var.name);
 
@@ -2329,9 +2326,7 @@ impl<'a> LLVM<'a> {
                         // Prepare user given arguments
                         for (i, arg) in args.into_iter().enumerate() {
                             let arg_eval = self.transform_expression(arg);
-                            eval.code
-                                .instructions
-                                .extend(arg_eval.code.instructions);
+                            eval.code.instructions.extend(arg_eval.code.instructions);
 
                             // println!(">>>> {:?}", arg_eval.register);
                             // println!("<<<< {:?}", expected_args[i]);
@@ -2700,10 +2695,49 @@ impl<'a> LLVM<'a> {
                 params: vec![],
                 ret_type: Type::I32,
                 body: Block::new(vec![]),
-                span: Span::new(FileId(0), 0, 0)
+                span: Span::new(FileId(0), 0, 0),
             },
             vec![],    // args
             Type::I32, // ret_type
         )));
+    }
+}
+
+impl<'a> LLVM<'a> {
+    /// Returns true if, starting from the beginning of this statement list,
+    /// control-flow is guaranteed to hit a return before falling through the end.
+    fn all_paths_return(&self, statements: &[Statement]) -> bool {
+        for s in statements {
+            if self.statement_guarantees_return(s) {
+                return true;
+            }
+            // If this statement doesn't guarantee a return, execution may continue
+            // to the next statement; keep scanning.
+        }
+        false
+    }
+
+    /// Returns true if executing this statement guarantees a return regardless of runtime conditions.
+    fn statement_guarantees_return(&self, s: &Statement) -> bool {
+        match s {
+            Statement::Return { .. } => true,
+            Statement::Block { body, .. } => self.all_paths_return(&body.statements),
+            Statement::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                let then_ret = self.all_paths_return(&then_block.statements);
+                let else_ret = if let Some(else_blk) = else_block {
+                    self.all_paths_return(&else_blk.statements)
+                } else {
+                    false
+                };
+                then_ret && else_ret
+            }
+            // Other statements (var decl, assignment, call, class, function, etc.)
+            // do not themselves guarantee a return.
+            _ => false,
+        }
     }
 }
