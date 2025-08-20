@@ -128,6 +128,25 @@ impl<'a> Ast<'a> {
                                                 span: lexical_token_span.join(expr.span()),
                                             });
                                         }
+                                        Token::Keyword(key) if key == "tensor" => {
+                                            self.next_token(); // consume the `array` keyword
+                                            self.expect(&Token::Punctuation("[".to_string()));
+                                            let arr_type = self.parse_type();
+                                            self.expect(&Token::Punctuation("]".to_string()));
+                                            // TODO: continue this ....
+                                            var_info.var_type = Type::Tensor {
+                                                var_type: Box::new(arr_type.clone()),
+                                                dimensions: vec![], // Dimensions will be set later
+                                                                    // or automatically evaluated during compilation
+                                            };
+                                            self.expect_operator(); // consume the = sign
+                                            let expr = self.parse_expr();
+                                            statements.push(Statement::VariableDecl {
+                                                identifier: var_info,
+                                                value: expr.clone(),
+                                                span: lexical_token_span.join(expr.span()),
+                                            })
+                                        }
                                         _ => {
                                             panic!(
                                                 "Unexpected token `{}`, expected a type identifier!",
@@ -171,6 +190,54 @@ impl<'a> Ast<'a> {
                                 let call_statement = self.parse_call(callee);
                                 statements.push(call_statement);
                             }
+                            Token::Punctuation(p) if p == "[" => {
+                                // Handle array access case (e.g., arr[0] = value;)
+                                self.next_token(); // consume '['
+                                let index = self.parse_expr();
+
+                                let end_bracket_span = if let Some(end_bracket_token) =
+                                    self.peek_token()
+                                    && end_bracket_token.token
+                                        == Token::Punctuation("]".to_string())
+                                {
+                                    let eb = end_bracket_token.span.clone();
+                                    self.next_token(); // consume ']'
+                                    eb
+                                } else {
+                                    panic!(
+                                        "Expected ']', but found end of input or unexpected token"
+                                    );
+                                };
+
+                                // Expect an assignment operator after the array access
+                                if let Some(next) = self.peek_token()
+                                    && let Token::Operator(op) = &next.token
+                                    && op == "="
+                                {
+                                    self.next_token(); // consume '='
+                                    let value = self.parse_expr();
+                                    statements.push(Statement::Assignment {
+                                        identifier: Expression::ArrayAccess {
+                                            array: Box::new(Expression::Variable {
+                                                var: Variable {
+                                                    name: name_clone,
+                                                    var_type: Type::ToBeEvaluated(
+                                                        "invalid".to_string(),
+                                                    ),
+                                                },
+                                                span: lexical_token_span,
+                                            }),
+                                            index: Box::new(index),
+                                            span: lexical_token_span.join(end_bracket_span),
+                                        },
+                                        value: value.clone(),
+                                        span: lexical_token_span.join(value.span()),
+                                    });
+                                    continue;
+                                } else {
+                                    panic!("Expected assignment after array access!");
+                                }
+                            }
                             //
                             // Method call or field access case (e.g., self.id = x; or obj.method(...);)
                             //
@@ -191,7 +258,7 @@ impl<'a> Ast<'a> {
                                     statements.push(Statement::Assignment {
                                         identifier: lhs,
                                         value: rhs.clone(),
-                                        span: lexical_token_span.join(rhs.span())
+                                        span: lexical_token_span.join(rhs.span()),
                                     });
                                     continue;
                                 }
@@ -234,18 +301,18 @@ impl<'a> Ast<'a> {
                 Token::Keyword(keyword) if keyword == "if" => {
                     // Make sure we can handle nested if statements
                     let condition = self.parse_expr();
-                    
+
                     let mut total_span = lexical_token_span;
                     self.expect(&Token::Punctuation("{".to_string()));
                     let then_block = self.parse();
                     total_span = then_block.span().unwrap_or(total_span).join(total_span);
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
-                    
+
                     let mut elif: Vec<Box<Statement>> = vec![];
 
-                    // We return the else block if available and push all `else if` blocks into the 
+                    // We return the else block if available and push all `else if` blocks into the
                     // vector above to deduplicate logic.
-                    let mut else_block : Option<Block> = None;
+                    let mut else_block: Option<Block> = None;
 
                     while let Some(lexical_token) = self.peek_token() {
                         if lexical_token.token == Token::Keyword("else".to_string()) {
@@ -254,8 +321,10 @@ impl<'a> Ast<'a> {
                             println!("dsd");
 
                             // Check if we have an else_if statement
-                            let (is_elif, else_if_cond) = if let Some(lexical_token_2) = self.peek_token() 
-                                && lexical_token_2.token == Token::Keyword("if".to_string()) {
+                            let (is_elif, else_if_cond) = if let Some(lexical_token_2) =
+                                self.peek_token()
+                                && lexical_token_2.token == Token::Keyword("if".to_string())
+                            {
                                 self.next_token(); // consume 'if'
                                 (true, Some(self.parse_expr()))
                             } else {
@@ -267,16 +336,16 @@ impl<'a> Ast<'a> {
                             let else_elif_block = self.parse();
                             self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
-
-                            let sub_total_span = total_span.join(else_elif_block.span().unwrap_or(total_span));
+                            let sub_total_span =
+                                total_span.join(else_elif_block.span().unwrap_or(total_span));
 
                             if is_elif {
-                                elif.push(Box::new(Statement::If{
+                                elif.push(Box::new(Statement::If {
                                     condition: else_if_cond.unwrap(),
                                     then_block: else_elif_block,
                                     elif: vec![],
                                     else_block: None,
-                                    span: sub_total_span
+                                    span: sub_total_span,
                                 }));
                                 continue; // continue parsing for more else else_if blocks
                             }
@@ -287,9 +356,9 @@ impl<'a> Ast<'a> {
                             break; // found else block, finished ---- don't allow else_if statemtns after else
                         }
                         break; // no more else blocks to parse
-                };
+                    }
 
-                statements.push(Statement::If {
+                    statements.push(Statement::If {
                         condition,
                         then_block,
                         elif,
@@ -308,7 +377,10 @@ impl<'a> Ast<'a> {
                     // Handle return statements
                     //
                     let expr = self.parse_expr();
-                    statements.push(Statement::Return { value: expr.clone(), span: lexical_token_span.join(expr.span()) });
+                    statements.push(Statement::Return {
+                        value: expr.clone(),
+                        span: lexical_token_span.join(expr.span()),
+                    });
                 }
                 Token::Keyword(keyword) if keyword == "class" => {
                     //
@@ -455,7 +527,7 @@ impl<'a> Ast<'a> {
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
-                                    span: Span::new(lexical_token_span.file, 0, 0)
+                                    span: Span::new(lexical_token_span.file, 0, 0),
                                 }),
                                 Visibility::Public,
                             ),
@@ -472,7 +544,7 @@ impl<'a> Ast<'a> {
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
-                                    span: Span::new(lexical_token_span.file, 0, 0)
+                                    span: Span::new(lexical_token_span.file, 0, 0),
                                 }),
                                 Visibility::Public,
                             ),
@@ -521,7 +593,10 @@ impl<'a> Ast<'a> {
 
                     self.expect(&Token::Punctuation("}".to_string()));
 
-                    statements.push(Statement::Block { body: block.clone(), span: block.span().unwrap_or(lexical_token_span) });
+                    statements.push(Statement::Block {
+                        body: block.clone(),
+                        span: block.span().unwrap_or(lexical_token_span),
+                    });
                 }
                 _ => {
                     //
@@ -573,7 +648,11 @@ impl<'a> Ast<'a> {
             }
         };
         self.expect(&Token::Punctuation(")".to_string()));
-        Statement::Call { callee, args, span: total_span }
+        Statement::Call {
+            callee,
+            args,
+            span: total_span,
+        }
     }
 
     // Parses a list of arguments for a function call
@@ -690,6 +769,21 @@ impl<'a> Ast<'a> {
 
         while let Some(lexical_token) = self.peek_token() {
             match &lexical_token.token {
+                // Indexing: expr[ index ]
+                Token::Punctuation(p) if p == "[" => {
+                    self.next_token(); // consume '['
+                    let index_expr = self.parse_expr();
+
+                    // Expect closing ']'
+                    let end_span = self.expect(&Token::Punctuation("]".to_string()));
+
+                    let new_span = expr.span().join(end_span);
+                    expr = Expression::ArrayAccess {
+                        array: Box::new(expr.clone()),
+                        index: Box::new(index_expr),
+                        span: new_span,
+                    };
+                }
                 Token::Punctuation(p) if p == "." => {
                     self.next_token(); // consume the '.'
 
@@ -764,7 +858,51 @@ impl<'a> Ast<'a> {
 
     // Entry point for expressions (lowest precedence)
     fn parse_expr(&mut self) -> Expression {
-        self.parse_comparison()
+        self.parse_initializer_list()
+    }
+
+    fn parse_initializer_list(&mut self) -> Expression {
+        let mut elements = Vec::new();
+
+        let lexical_token_span = if let Some(lexical_token) = self.peek_token()
+            && lexical_token.token == Token::Punctuation("{".to_string())
+        {
+            let sp = lexical_token.span.clone();
+            self.next_token(); // consume '{'
+            sp
+        } else {
+            return self.parse_comparison(); // If not an initializer list, continue parsing 
+            // next syntactical construct in precedence
+        };
+
+        let mut token_span = lexical_token_span.clone();
+
+        while let Some(lexical_token) = self.peek_token() {
+            if lexical_token.token == Token::Punctuation("}".to_string()) {
+                self.next_token(); // consume '}'
+                break;
+            }
+            let expr = self.parse_expr();
+            elements.push(expr.clone());
+            token_span = token_span.join(expr.span());
+
+            if let Some(next_token) = self.peek_token() {
+                if next_token.token == Token::Punctuation(",".to_string()) {
+                    self.next_token(); // consume ','
+                } else if next_token.token == Token::Punctuation("}".to_string()) {
+                    self.next_token(); // consume ']'
+                    break;
+                } else {
+                    panic!("Expected ',' or '}}', found {:?}", next_token.token);
+                }
+            } else {
+                panic!("Unexpected end of input while parsing initializer list");
+            }
+        }
+        Expression::InitializerList {
+            elements,
+            span: token_span,
+        }
     }
 
     // New: comparisons (==, !=, <, >, <=, >=)

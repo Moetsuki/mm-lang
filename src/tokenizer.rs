@@ -8,7 +8,7 @@ pub const OPERATORS: [&str; 12] = [
     "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=",
 ];
 
-pub const KEYWORDS: [&str; 19] = [
+pub const KEYWORDS: [&str; 20] = [
     "if",
     "else",
     "while",
@@ -28,6 +28,7 @@ pub const KEYWORDS: [&str; 19] = [
     "protected",
     "init",
     "destroy",
+    "tensor",
 ];
 
 #[derive(Debug, Clone)]

@@ -38,7 +38,10 @@ pub enum Type {
         parent: Option<Box<Type>>,
         fields: Vec<Type>,
     },
-    Array(Box<Type>),
+    Tensor {
+        var_type: Box<Type>,
+        dimensions: Vec<usize>,
+    },
     UserDefined(String, Box<Type>),
     Pointer(Box<Type>),
     ToBeEvaluated(String),
@@ -140,7 +143,7 @@ impl Display for Type {
                     name, parent_str, fields_str
                 )
             }
-            Type::Array(elem_type) => format!("array<{}>", elem_type),
+            Type::Tensor { var_type, dimensions } => format!("tensor[{:?};{:?}]", var_type, dimensions),
             Type::Pointer(inner_type) => format!("ptr<{}>", inner_type),
             Type::UserDefined(name, typ) => {
                 format!("UserDefined {} <{}>", name, typ)
@@ -226,7 +229,10 @@ impl Hash for Type {
                 }
                 fields.hash(state);
             }
-            Type::Array(elem_type) => elem_type.hash(state),
+            Type::Tensor{ var_type, dimensions } => {
+                var_type.hash(state);
+                dimensions.hash(state);
+            },
             Type::Pointer(inner_type) => {
                 "ptr<".hash(state);
                 inner_type.hash(state);

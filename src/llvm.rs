@@ -546,6 +546,76 @@ impl<'a> LLVM<'a> {
                     value,
                     span,
                 } => {
+                    // Special-case tensor initializer lists to allocate and populate contiguous memory
+                    if let (
+                        Type::Tensor {
+                            var_type: elem_ty, ..
+                        },
+                        Expression::InitializerList { elements, .. },
+                    ) = (&var_info.var_type, value)
+                    {
+                        println!("### Statement::VariableDecl (tensor)");
+                        self.source.caret(*span);
+
+                        // Allocate a contiguous buffer: alloca <elem>, i64 <len>
+                        let elem_llvm = self.type_to_llvm(elem_ty);
+                        let len = elements.len() as i64;
+                        let arr_reg = Register::new_var(
+                            Type::Pointer(elem_ty.clone()),
+                            var_info.name.clone(),
+                        );
+                        // Use LLVM's variable-count alloca form: alloca T, i64 N
+                        eval.code
+                            .push(format!("%{} = alloca {}, i64 {}", arr_reg, elem_llvm, len));
+
+                        // Store each element
+                        for (i, el) in elements.iter().enumerate() {
+                            let el_eval = self.transform_expression(el.clone());
+                            eval.code.instructions.extend(el_eval.code.instructions);
+
+                            // Coerce element to target elem_ty if needed
+                            let store_reg = if el_eval.register.var_type != *elem_ty.clone() {
+                                self.insert_type_conversion(
+                                    &mut eval.code,
+                                    &el_eval.register,
+                                    elem_ty,
+                                )
+                            } else {
+                                el_eval.register
+                            };
+
+                            // Compute pointer to element i: getelementptr <elem>, ptr %arr_reg, i64 i
+                            let idx_ptr = Register::new_var(
+                                Type::Pointer(elem_ty.clone()),
+                                format!("{}_idx{}_ptr", var_info.name, i),
+                            );
+                            eval.code.push(format!(
+                                "%{} = getelementptr inbounds {}, ptr %{}, i64 {}",
+                                idx_ptr, elem_llvm, arr_reg, i
+                            ));
+                            // Store value
+                            eval.code.push(format!(
+                                "store {} %{}, ptr %{}",
+                                elem_llvm, store_reg, idx_ptr
+                            ));
+                        }
+
+                        // Insert symbol: keep variable's declared tensor type, but the register carries a pointer to element
+                        let mut final_variable = var_info.clone();
+                        let final_type = match &final_variable.var_type {
+                            Type::ToBeEvaluated(tbe_type) => self
+                                .class_definitions
+                                .get(tbe_type)
+                                .map(|c| self.get_class_type(&c.name))
+                                .unwrap_or(final_variable.var_type.clone()),
+                            _ => final_variable.var_type.clone(),
+                        };
+                        final_variable.var_type = final_type;
+
+                        self.scope.insert(arr_reg.clone(), final_variable.clone());
+                        continue;
+                    }
+
                     let value_eval = self.transform_expression(value.clone());
                     eval.code
                         .instructions
@@ -658,6 +728,69 @@ impl<'a> LLVM<'a> {
                         if res.is_none() {
                             self.scope.insert(result_register, var_info.clone());
                         }
+                    }
+                    Expression::ArrayAccess { array, index, .. } => {
+                        println!("### Statement::Assignment (array element)");
+                        self.source.caret(*span);
+
+                        // Evaluate base array expression (should produce a pointer to element type)
+                        let arr_eval = self.transform_expression(*array.clone());
+                        eval.code
+                            .instructions
+                            .extend(arr_eval.code.instructions.clone());
+
+                        // Evaluate index and coerce to i64 if needed
+                        let idx_eval = self.transform_expression(*index.clone());
+                        eval.code
+                            .instructions
+                            .extend(idx_eval.code.instructions.clone());
+                        let idx64 = if idx_eval.register.var_type != Type::I64 {
+                            self.insert_type_conversion(
+                                &mut eval.code,
+                                &idx_eval.register,
+                                &Type::I64,
+                            )
+                        } else {
+                            idx_eval.register
+                        };
+
+                        // Evaluate RHS
+                        let rhs_eval = self.transform_expression(rhs.clone());
+                        eval.code
+                            .instructions
+                            .extend(rhs_eval.code.instructions.clone());
+
+                        // Element type is the pointee of arr_eval.register.var_type
+                        let elem_ty = match &arr_eval.register.var_type {
+                            Type::Pointer(inner) => inner.as_ref().clone(),
+                            other => panic!("Array assignment on non-pointer type: {:?}", other),
+                        };
+                        let elem_llvm = self.type_to_llvm(&elem_ty);
+
+                        // Coerce RHS to element type
+                        let rhs_coerced = if rhs_eval.register.var_type != elem_ty {
+                            self.insert_type_conversion(
+                                &mut eval.code,
+                                &rhs_eval.register,
+                                &elem_ty,
+                            )
+                        } else {
+                            rhs_eval.register
+                        };
+
+                        // Compute element pointer and store
+                        let elem_ptr = Register::new_var(
+                            Type::Pointer(Box::new(elem_ty.clone())),
+                            "elem_ptr".to_string(),
+                        );
+                        eval.code.push(format!(
+                            "%{} = getelementptr inbounds {}, ptr %{}, i64 %{}",
+                            elem_ptr, elem_llvm, arr_eval.register, idx64
+                        ));
+                        eval.code.push(format!(
+                            "store {} %{}, ptr %{}",
+                            elem_llvm, rhs_coerced, elem_ptr
+                        ));
                     }
                     Expression::FieldAccess {
                         object: lhs, field, ..
@@ -796,7 +929,7 @@ impl<'a> LLVM<'a> {
 
                     println!("### Statement::If");
                     self.source.caret(*span);
- 
+
                     // Path return analysis
                     //
                     // Omit done_label if all paths return a value and theres an else statement to
@@ -869,35 +1002,35 @@ impl<'a> LLVM<'a> {
                         .zip(elif_labels.iter())
                         .enumerate()
                         .for_each(|(i, (e, label))| {
-                        match e.as_ref() {
+                            match e.as_ref() {
                                 Statement::If { condition, .. } => {
-                                let cond = self.transform_expression(condition.clone());
+                                    let cond = self.transform_expression(condition.clone());
                                     eval.code.instructions.extend(cond.code.instructions);
 
-                                // Compare condition with zero
-                                let cmp_reg = Register::new(Type::Bool);
-                                eval.code.push(format!(
-                                    "%{} = icmp ne i1 %{}, 0",
-                                    cmp_reg, cond.register
-                                ));
+                                    // Compare condition with zero
+                                    let cmp_reg = Register::new(Type::Bool);
+                                    eval.code.push(format!(
+                                        "%{} = icmp ne i1 %{}, 0",
+                                        cmp_reg, cond.register
+                                    ));
 
-                                // Branch based on comparison
-                                eval.code.push(format!(
-                                    "br i1 %{}, label %{}, label %{}",
-                                    cmp_reg,
-                                    label,
-                                    format!("else_{}_fallthrough_{}", i, eval.register.id)
-                                ));
+                                    // Branch based on comparison
+                                    eval.code.push(format!(
+                                        "br i1 %{}, label %{}, label %{}",
+                                        cmp_reg,
+                                        label,
+                                        format!("else_{}_fallthrough_{}", i, eval.register.id)
+                                    ));
                                     eval.code.push(format!(
                                         "else_{}_fallthrough_{}:",
                                         i, eval.register.id
                                     ));
-                            }
+                                }
                                 _ => {
                                     panic!("Unsupported statement, expected `else if` got {:?}", *e)
                                 }
-                        }
-                    });
+                            }
+                        });
 
                     // We hit nothing, so jump to `else` label
                     eval.code.push(format!("br label %{}", false_label));
@@ -932,7 +1065,7 @@ impl<'a> LLVM<'a> {
                                 }
                             }
                             _ => panic!("Unsupported statement, expected `else if` got {:?}", *e),
-                    });
+                        });
 
                     // Else block
                     eval.code.push(format!("{}:", false_label));
@@ -1176,12 +1309,6 @@ impl<'a> LLVM<'a> {
                         .unwrap_or_else(|| {
                             panic!("Return statement outside of a function context!")
                         });
-
-                    // println!("{{Statement::Return}}");
-                    // println!("Inside Function Context");
-                    // println!("{:?}", self.current_func_scope);
-                    // println!("Expected Return Type: {:?}", expected_ret_type);
-                    // println!("Actual Return Type: {:?}", return_eval.register.var_type);
 
                     // Add type coercion
                     if expected_ret_type != return_eval.register.var_type {
@@ -1632,6 +1759,46 @@ impl<'a> LLVM<'a> {
                 eval.code
                     .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
+            }
+            Expression::ArrayAccess { array, index, span } => {
+                println!(">>> Expression::ArrayAccess");
+                self.source.caret(span);
+
+                // Evaluate array expression and index
+                let arr_eval = self.transform_expression(*array);
+                let idx_eval = self.transform_expression(*index);
+                eval.code.instructions.extend(arr_eval.code.instructions);
+                eval.code.instructions.extend(idx_eval.code.instructions);
+
+                // Coerce index to i64
+                let idx64 = if idx_eval.register.var_type != Type::I64 {
+                    self.insert_type_conversion(&mut eval.code, &idx_eval.register, &Type::I64)
+                } else {
+                    idx_eval.register
+                };
+
+                // Element type comes from pointer pointee
+                let elem_ty = match &arr_eval.register.var_type {
+                    Type::Pointer(inner) => inner.as_ref().clone(),
+                    other => panic!("Indexing non-pointer type: {:?}", other),
+                };
+                let elem_llvm = self.type_to_llvm(&elem_ty);
+
+                // Compute element pointer and load
+                let elem_ptr = Register::new_var(
+                    Type::Pointer(Box::new(elem_ty.clone())),
+                    "idx_ptr".to_string(),
+                );
+                eval.code.push(format!(
+                    "%{} = getelementptr inbounds {}, ptr %{}, i64 %{}",
+                    elem_ptr, elem_llvm, arr_eval.register, idx64
+                ));
+                eval.register = Register::new_var(elem_ty.clone(), "idx_val".to_string());
+                eval.code.push(format!(
+                    "%{} = load {}, ptr %{}",
+                    eval.register, elem_llvm, elem_ptr
+                ));
+                eval.register.var_type = elem_ty;
             }
             Expression::StringLiteral { value, .. } => {
                 let string_data = StringData::new(value);

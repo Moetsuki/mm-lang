@@ -15,6 +15,10 @@ pub enum Expression {
         value: String,
         span: Span,
     },
+    InitializerList {
+        elements: Vec<Expression>,
+        span: Span,
+    },
     Boolean {
         value: bool,
         span: Span,
@@ -51,6 +55,11 @@ pub enum Expression {
         field: String,
         span: Span,
     },
+    ArrayAccess {
+        array: Box<Expression>,
+        index: Box<Expression>,
+        span: Span,
+    }
 }
 
 impl Expression {
@@ -59,6 +68,7 @@ impl Expression {
             Expression::Variable { span, .. } => *span,
             Expression::Number { span, .. } => *span,
             Expression::StringLiteral { span, .. } => *span,
+            Expression::InitializerList { span, .. } => *span, 
             Expression::Boolean { span, .. } => *span,
             Expression::Cast { span, .. } => *span,
             Expression::BinaryOp { span, .. } => *span,
@@ -66,6 +76,7 @@ impl Expression {
             Expression::Call { span, .. } => *span,
             Expression::MethodCall { span, .. } => *span,
             Expression::FieldAccess { span, .. } => *span,
+            Expression::ArrayAccess { span, .. } => *span,
         }
     }
 
@@ -74,6 +85,7 @@ impl Expression {
             Expression::Variable { span, .. } => span,
             Expression::Number { span, .. } => span,
             Expression::StringLiteral { span, .. } => span,
+            Expression::InitializerList { span, .. } => span,
             Expression::Boolean { span, .. } => span,
             Expression::Cast { span, .. } => span,
             Expression::BinaryOp { span, .. } => span,
@@ -81,6 +93,7 @@ impl Expression {
             Expression::Call { span, .. } => span,
             Expression::MethodCall { span, .. } => span,
             Expression::FieldAccess { span, .. } => span,
+            Expression::ArrayAccess { span, .. } => span,
         }
     }
 }
@@ -92,6 +105,10 @@ impl Display for Expression {
             Expression::Number{ value, .. } => format!("Number({})", value),
             Expression::StringLiteral{ value, .. } => format!("StringLiteral({})", value),
             Expression::Boolean{ value, .. } => format!("Boolean({})", value),
+            Expression::InitializerList { elements, .. } => {
+                let elements_str = elements.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ");
+                format!("InitializerList([{}])", elements_str)
+            }
             Expression::Cast { expr, target_type, .. } => {
                 format!("Cast({}, to: {})", expr, target_type)
             }
@@ -109,6 +126,9 @@ impl Display for Expression {
             }
             Expression::FieldAccess { object, field, .. } => {
                 format!("FieldAccess({}, {})", object, field)
+            }
+            Expression::ArrayAccess { array, index, .. } => {
+                format!("ArrayAccess({}, {})", array, index)
             }
         };
         write!(f, "{}", fmtstr)

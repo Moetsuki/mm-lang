@@ -74,6 +74,7 @@ fn process(
     let asmfile = "build/asm_".to_string() + &caller;
     let outfile_invoke = "./".to_string() + &outfile;
 
+
     // for token in &tokens {
     //     println!("{:?}", token);
     // }
@@ -557,7 +558,7 @@ fn test_if_else_elseif() {
     let source = r#"
     x : i64 = 5;
     y : i64 = -2;
-
+    
     if x + y == 0 {
         return 1;
     } else if x + y > 0 {
@@ -640,4 +641,14 @@ fn test_if_else_elseif_2() {
     return -1;
     "#;
     process(source, None, Some(44), false);
+}
+
+#[test]
+fn test_tensor() {
+    let source = r#"
+    arr: tensor[i64] = {11, 22, 33};
+
+    return arr[1] + arr[0] + arr[2];
+    "#;
+    process(source, None, Some(66), false);
 }
