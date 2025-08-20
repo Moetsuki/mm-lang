@@ -4,11 +4,12 @@ use crate::{file::SourceFile, span::Span};
 
 pub const PUNCTUATION: [&str; 11] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->"];
 
-pub const OPERATORS: [&str; 12] = [
-    "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=",
+pub const OPERATORS: [&str; 17] = [
+    "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=", // Logical operators
+    "!", "&", "|", "&&", "||",
 ];
 
-pub const KEYWORDS: [&str; 20] = [
+pub const KEYWORDS: [&str; 22] = [
     "if",
     "else",
     "while",
@@ -29,6 +30,8 @@ pub const KEYWORDS: [&str; 20] = [
     "init",
     "destroy",
     "tensor",
+    "true",
+    "false",
 ];
 
 #[derive(Debug, Clone)]
@@ -150,11 +153,7 @@ pub fn tokenize_line(
                     &mut tokens,
                     line,
                     column,
-                    Span::new(
-                        source_file.id,
-                        start,
-                        end,
-                    ),
+                    Span::new(source_file.id, start, end),
                 );
             }
         }
@@ -180,11 +179,13 @@ pub fn tokenize_line(
                 // Emit the current token if it's not empty
                 let start = token_start.take().unwrap();
                 let end = start + token.len();
-                emit(&mut token, &mut tokens, line, column, Span::new(
-                    source_file.id,
-                    start,
-                    end,
-                ));
+                emit(
+                    &mut token,
+                    &mut tokens,
+                    line,
+                    column,
+                    Span::new(source_file.id, start, end),
+                );
             }
 
             /////////////////////////
@@ -228,23 +229,21 @@ pub fn tokenize_line(
                     // First, emit any pending identifier/number token
                     let start = token_start.take().unwrap();
                     let end = start + token.len();
-                    emit(&mut token, &mut tokens, line, column, Span::new(
-                        source_file.id,
-                        start,
-                        end,
-                    ));
-                    
+                    emit(
+                        &mut token,
+                        &mut tokens,
+                        line,
+                        column,
+                        Span::new(source_file.id, start, end),
+                    );
+
                     // Then emit the single-character operator/punctuation itself
                     let op_start = *cursor - ch.len_utf8();
                     tokens.push(LexicalToken {
                         token: conv(String::from(ch)),
                         line,
                         column,
-                        span: Span::new(
-                            source_file.id,
-                            op_start,
-                            *cursor,
-                        ),
+                        span: Span::new(source_file.id, op_start, *cursor),
                     });
 
                     ////////////////////////////////////////////
@@ -271,7 +270,7 @@ pub fn tokenize_line(
                                     source_file.id,
                                     merged_start,
                                     merged_start + last_str.len(),
-                                )
+                                ),
                             }); // Push the combined token
                         }
                     }
@@ -294,17 +293,15 @@ pub fn tokenize_line(
 
     // Emit the last token if it's not empty
     if !token.is_empty() {
-        let start = token_start.take().unwrap_or((*cursor).saturating_sub(token.len()));
+        let start = token_start
+            .take()
+            .unwrap_or((*cursor).saturating_sub(token.len()));
         let end = start + token.len();
         tokens.push(LexicalToken {
             token: conv(token.clone()),
             line,
             column,
-            span: Span::new(
-                source_file.id,
-                start,
-                end,
-            ),
+            span: Span::new(source_file.id, start, end),
         });
     }
 
@@ -313,11 +310,7 @@ pub fn tokenize_line(
         token: Token::Newline,
         line,
         column,
-        span: Span::new(
-            source_file.id,
-            *cursor,
-            *cursor + 1,
-        )
+        span: Span::new(source_file.id, *cursor, *cursor + 1),
     });
     *cursor += 1;
 

@@ -652,3 +652,18 @@ fn test_tensor() {
     "#;
     process(source, None, Some(66), false);
 }
+
+#[test]
+fn test_boolean() {
+    let source = r#"
+    a: bool = true;
+    b: bool = false;
+
+    if a && !b {
+        return 1;
+    } else {
+        return 0;
+    }
+    "#;
+    process(source, None, Some(1), false);
+}

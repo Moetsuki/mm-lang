@@ -698,8 +698,16 @@ impl<'a> Ast<'a> {
             match &lexical_token.token {
                 Token::Number(n) => {
                     let value = *n;
-                    self.next_token();
+                    self.next_token(); // consume the value
                     Expression::Number {
+                        value,
+                        span: lexical_token_span,
+                    }
+                }
+                Token::Keyword(key) if key == "true" || key == "false" => {
+                    let value = key == "true";
+                    self.next_token(); // consume the value
+                    Expression::Boolean {
                         value,
                         span: lexical_token_span,
                     }
@@ -858,6 +866,8 @@ impl<'a> Ast<'a> {
 
     // Entry point for expressions (lowest precedence)
     fn parse_expr(&mut self) -> Expression {
+        // Precedence climbing from lowest to highest:
+        // initializer_list -> logical_or -> logical_and -> comparison -> additive -> term -> cast -> postfix -> factor
         self.parse_initializer_list()
     }
 
@@ -871,7 +881,7 @@ impl<'a> Ast<'a> {
             self.next_token(); // consume '{'
             sp
         } else {
-            return self.parse_comparison(); // If not an initializer list, continue parsing 
+            return self.parse_logical_or(); // If not an initializer list, continue parsing 
             // next syntactical construct in precedence
         };
 
@@ -903,6 +913,52 @@ impl<'a> Ast<'a> {
             elements,
             span: token_span,
         }
+    }
+
+    // New: logical OR (||)
+    fn parse_logical_or(&mut self) -> Expression {
+        let mut expr = self.parse_logical_and();
+
+        while let Some(tok) = self.peek_token() {
+            if let Token::Operator(op) = &tok.token
+                && op == "||" {
+                    self.next_token();
+                    let rhs = self.parse_logical_and();
+                    expr = Expression::BinaryOp {
+                        op: "||".to_string(),
+                        left: Box::new(expr.clone()),
+                        right: Box::new(rhs.clone()),
+                        span: expr.span().join(rhs.span()),
+                    };
+                    continue;
+                }
+            break;
+        }
+
+        expr
+    }
+
+    // New: logical AND (&&)
+    fn parse_logical_and(&mut self) -> Expression {
+        let mut expr = self.parse_comparison();
+
+        while let Some(tok) = self.peek_token() {
+            if let Token::Operator(op) = &tok.token
+                && op == "&&" {
+                    self.next_token();
+                    let rhs = self.parse_comparison();
+                    expr = Expression::BinaryOp {
+                        op: "&&".to_string(),
+                        left: Box::new(expr.clone()),
+                        right: Box::new(rhs.clone()),
+                        span: expr.span().join(rhs.span()),
+                    };
+                    continue;
+                }
+            break;
+        }
+
+        expr
     }
 
     // New: comparisons (==, !=, <, >, <=, >=)
@@ -985,7 +1041,7 @@ impl<'a> Ast<'a> {
 
     // This method should have high precedence in the expression parsing
     fn parse_cast(&mut self) -> Expression {
-        let mut expr = self.parse_postfix();
+        let mut expr = self.parse_unary();
 
         while let Some(lexical_token) = self.peek_token() {
             if let Token::Keyword(keyword) = &lexical_token.token {
@@ -1012,6 +1068,25 @@ impl<'a> Ast<'a> {
         }
 
         expr
+    }
+
+    // Handle unary operators with higher precedence than cast target binder
+    fn parse_unary(&mut self) -> Expression {
+        if let Some(lexical_token) = self.peek_token() {
+            let lexical_token_span = lexical_token.span;
+            if let Token::Operator(op) = &lexical_token.token
+                && op == "!" {
+                    self.next_token();
+                    let operand = self.parse_unary();
+                    return Expression::UnaryOp {
+                        op: "!".to_string(),
+                        expr: Box::new(operand.clone()),
+                        span: lexical_token_span.join(operand.span()),
+                    };
+                }
+        }
+        // Fallback to postfix (which includes factors)
+        self.parse_postfix()
     }
 
     // Parses a function definition

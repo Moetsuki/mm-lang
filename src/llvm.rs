@@ -1760,6 +1760,13 @@ impl<'a> LLVM<'a> {
                     .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
             }
+            Expression::Boolean { value, .. } => {
+                // Materialize boolean constant into a register
+                let int_val = if value { 1 } else { 0 };
+                eval.code
+                    .push(format!("%{} = add i1 0, {}", eval.register, int_val));
+                eval.register.var_type = Type::Bool;
+            }
             Expression::ArrayAccess { array, index, span } => {
                 println!(">>> Expression::ArrayAccess");
                 self.source.caret(span);
@@ -1845,7 +1852,32 @@ impl<'a> LLVM<'a> {
                 eval.code.instructions.extend(left_eval.code.instructions);
                 eval.code.instructions.extend(right_eval.code.instructions);
 
-                // Determine the result type (promote to larger type)
+                // Logical ops handled separately (produce boolean i1)
+                if op == "&&" || op == "||" {
+                    // Coerce both operands to bool (i1)
+                    let to_bool = |code: &mut IR, r: &Register| -> Register {
+                        if r.var_type == Type::Bool {
+                            r.clone()
+                        } else {
+                            let tmp = Register::new(Type::Bool);
+                            code.push(format!("%{} = icmp ne {} %{}, 0", tmp, r.llvm_type(), r));
+                            tmp
+                        }
+                    };
+
+                    let lbool = to_bool(&mut eval.code, &left_eval.register);
+                    let rbool = to_bool(&mut eval.code, &right_eval.register);
+
+                    let llvm_op = if op == "&&" { "and" } else { "or" };
+                    eval.code.push(format!(
+                        "%{} = {} i1 %{}, %{}",
+                        eval.register, llvm_op, lbool, rbool
+                    ));
+                    eval.register.var_type = Type::Bool;
+                    return eval;
+                }
+
+                // Determine the result type (promote to larger type) for arithmetic/comparison
                 let result_type = self.determine_binary_op_result_type(
                     &left_eval.register.var_type,
                     &right_eval.register.var_type,
