@@ -3278,9 +3278,7 @@ impl<'a> LLVM<'a> {
             Type::I32, // ret_type
         )));
     }
-}
-
-impl<'a> LLVM<'a> {
+    
     /// Returns true if, starting from the beginning of this statement list,
     /// control-flow is guaranteed to hit a return before falling through the end.
     fn all_paths_return(&self, statements: &[Statement]) -> bool {

@@ -933,12 +933,18 @@ impl<'a> Ast<'a> {
                                 panic!("Unterminated struct literal");
                             }
                         };
+                        //
+                        // This identifier is a known struct followed by braces
+                        //
                         Expression::StructLiteral {
                             name: name_clone,
                             fields,
                             span: lexical_token_span.join(end_span),
                         }
                     } else {
+                        //
+                        // This Identifier is just a variable
+                        //
                         Expression::Variable {
                             var: Variable {
                                 name: name_clone,
