@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_mut)]
 mod ast;
+mod backend;
 mod backtrace;
 mod block;
 mod expression;
@@ -8,6 +9,8 @@ mod file;
 mod llvm;
 mod span;
 mod statement;
+mod target_c;
+mod target_llvm;
 mod tokenizer;
 mod types;
 mod variable;
@@ -20,6 +23,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use tokenizer::tokenize;
 
+use crate::backend::{Backend, TargetKind};
 use crate::file::SourceFile;
 
 fn get_caller_name() -> Option<String> {
@@ -84,16 +88,31 @@ fn process(
 
     //print_block(&_block, 0);
 
-    let mut llvm = llvm::LLVM::new(ast, &source_file);
+    // Select backend via env: MM_TARGET=llvm|c (default: llvm)
+    let target = std::env::var("MM_TARGET").unwrap_or_else(|_| "c".to_string());
+    let kind = match target.to_lowercase().as_str() {
+        "c" => TargetKind::C,
+        _ => TargetKind::LLVM,
+    };
 
-    llvm.compile();
-
-    let ir_output = llvm.output();
+    // Instantiate backend
+    let ir_output = match kind {
+        TargetKind::LLVM => {
+            let mut backend = target_llvm::TargetLLVM::from_ast(ast, &source_file);
+            backend.compile();
+            backend.output()
+        }
+        TargetKind::C => {
+            let mut backend = target_c::TargetC::from_ast(ast, &source_file);
+            backend.compile();
+            backend.output()
+        }
+    };
     for (i, line) in ir_output.lines().enumerate() {
         println!("{:>3}: {}", i, line);
     }
 
-    if print_asm {
+    if print_asm && matches!(kind, TargetKind::LLVM) {
         // Compile LLVM IR via stdin
         let mut clang = Command::new("clang")
             .args(["-x", "ir", "-", "-S", "-g", "-O0", "-o", &asmfile])
@@ -127,7 +146,7 @@ fn process(
         }
     }
 
-    {
+    if matches!(kind, TargetKind::LLVM) {
         // Compile LLVM IR via stdin
         let mut clang = Command::new("clang")
             .args(["-x", "ir", "-", "-o", &outfile]) // -x ir tells clang it's LLVM IR, - means stdin
@@ -189,6 +208,63 @@ fn process(
             }
         } else {
             println!("Compilation failed:");
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+            panic!("");
+        }
+    } else if matches!(kind, TargetKind::C) {
+        // For C backend: compile C text to executable using clang
+        let mut clang = Command::new("clang")
+            .args(["-x", "c", "-", "-o", &outfile])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start clang (C mode)");
+
+        if let Some(stdin) = clang.stdin.as_mut() {
+            stdin
+                .write_all(ir_output.as_bytes())
+                .expect("Failed to write C code to clang stdin");
+        }
+
+        let output = clang
+            .wait_with_output()
+            .expect("Failed to read clang (C) output");
+
+        if output.status.success() {
+            println!("C compilation successful!");
+            thread::sleep(std::time::Duration::from_millis(500));
+
+            let run_output = Command::new(&outfile_invoke)
+                .output()
+                .expect("Failed to run executable (C)");
+
+            let std_out = String::from_utf8_lossy(&run_output.stdout);
+            let exit_code = run_output.status.code().unwrap();
+            let std_err = String::from_utf8_lossy(&run_output.stderr);
+
+            println!("Program output:");
+            println!("stdout: {}", &std_out);
+            if !run_output.stderr.is_empty() {
+                panic!("stderr: {}", &std_err);
+            }
+            println!("Exit code: {}", &exit_code);
+
+            if let Some(_expected_exit_code) = expected_exit_code {
+                assert_eq!(
+                    exit_code as i8, _expected_exit_code as i8,
+                    "Program did not exit with expected code"
+                );
+            }
+            if let Some(expected_output) = expected {
+                assert_eq!(
+                    std_out.trim(),
+                    expected_output.trim(),
+                    "Program output did not match expected output"
+                );
+            }
+        } else {
+            println!("C compilation failed:");
             println!("{}", String::from_utf8_lossy(&output.stderr));
             panic!("");
         }
