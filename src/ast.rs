@@ -660,7 +660,7 @@ impl<'a> Ast<'a> {
         let mut args = Vec::new();
         while let Some(lexical_token) = self.peek_token() {
             match &lexical_token.token {
-                Token::Identifier(_) | Token::Number(_) | Token::StringLiteral(_) => {
+                Token::Identifier(_) | Token::Number(_) | Token::NumberFloat(_) | Token::StringLiteral(_) => {
                     args.push(self.parse_expr());
                     if let Some(next_token) = self.peek_token() {
                         if next_token.token == Token::Punctuation(",".to_string()) {
@@ -704,6 +704,14 @@ impl<'a> Ast<'a> {
                         span: lexical_token_span,
                     }
                 }
+                Token::NumberFloat(f) => {
+                    let value = *f;
+                    self.next_token();
+                    Expression::Float {
+                        value,
+                        span: lexical_token_span,
+                    }
+                }
                 Token::Keyword(key) if key == "true" || key == "false" => {
                     let value = key == "true";
                     self.next_token(); // consume the value
@@ -720,6 +728,14 @@ impl<'a> Ast<'a> {
                             Token::Number(n) => {
                                 let result = Expression::Number {
                                     value: -(*n),
+                                    span: lexical_token_span.join(next_tok.span),
+                                };
+                                self.next_token(); // consume the number
+                                result
+                            }
+                            Token::NumberFloat(f) => {
+                                let result = Expression::Float {
+                                    value: -(*f),
                                     span: lexical_token_span.join(next_tok.span),
                                 };
                                 self.next_token(); // consume the number

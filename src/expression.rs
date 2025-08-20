@@ -3,12 +3,16 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Variable{
+    Variable {
         var: Variable,
         span: Span,
     },
     Number {
         value: i64,
+        span: Span,
+    },
+    Float {
+        value: f64,
         span: Span,
     },
     StringLiteral {
@@ -59,7 +63,7 @@ pub enum Expression {
         array: Box<Expression>,
         index: Box<Expression>,
         span: Span,
-    }
+    },
 }
 
 impl Expression {
@@ -67,8 +71,9 @@ impl Expression {
         match self {
             Expression::Variable { span, .. } => *span,
             Expression::Number { span, .. } => *span,
+            Expression::Float { span, .. } => *span,
             Expression::StringLiteral { span, .. } => *span,
-            Expression::InitializerList { span, .. } => *span, 
+            Expression::InitializerList { span, .. } => *span,
             Expression::Boolean { span, .. } => *span,
             Expression::Cast { span, .. } => *span,
             Expression::BinaryOp { span, .. } => *span,
@@ -84,6 +89,7 @@ impl Expression {
         match self {
             Expression::Variable { span, .. } => span,
             Expression::Number { span, .. } => span,
+            Expression::Float { span, .. } => span,
             Expression::StringLiteral { span, .. } => span,
             Expression::InitializerList { span, .. } => span,
             Expression::Boolean { span, .. } => span,
@@ -101,27 +107,51 @@ impl Expression {
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let fmtstr = match self {
-            Expression::Variable { var, .. } => format!("Variable::<{}>({})", var.var_type, var.name),
-            Expression::Number{ value, .. } => format!("Number({})", value),
-            Expression::StringLiteral{ value, .. } => format!("StringLiteral({})", value),
-            Expression::Boolean{ value, .. } => format!("Boolean({})", value),
+            Expression::Variable { var, .. } => {
+                format!("Variable::<{}>({})", var.var_type, var.name)
+            }
+            Expression::Number { value, .. } => format!("Number({})", value),
+            Expression::Float { value, .. } => format!("Float({})", value),
+            Expression::StringLiteral { value, .. } => format!("StringLiteral({})", value),
+            Expression::Boolean { value, .. } => format!("Boolean({})", value),
             Expression::InitializerList { elements, .. } => {
-                let elements_str = elements.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ");
+                let elements_str = elements
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("InitializerList([{}])", elements_str)
             }
-            Expression::Cast { expr, target_type, .. } => {
+            Expression::Cast {
+                expr, target_type, ..
+            } => {
                 format!("Cast({}, to: {})", expr, target_type)
             }
-            Expression::BinaryOp { op, left, right, .. } => {
+            Expression::BinaryOp {
+                op, left, right, ..
+            } => {
                 format!("BinaryOp({} {} {})", left, op, right)
             }
             Expression::UnaryOp { op, expr, .. } => format!("UnaryOp({} {})", op, expr),
             Expression::Call { callee, args, .. } => {
-                let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
+                let args_str = args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("Call({}, [{}])", callee, args_str)
             }
-            Expression::MethodCall { object, method, args, .. } => {
-                let args_str = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ");
+            Expression::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let args_str = args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("Method({}, {}, [{}])", object, method, args_str)
             }
             Expression::FieldAccess { object, field, .. } => {

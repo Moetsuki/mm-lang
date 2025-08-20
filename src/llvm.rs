@@ -1760,6 +1760,16 @@ impl<'a> LLVM<'a> {
                     .push(format!("%{} = add i64 0, {}", eval.register, value));
                 eval.register.var_type = Type::I64;
             }
+            Expression::Float { value, .. } => {
+                // Materialize double constant; ensure decimal point is present
+                let s = if value.fract() == 0.0 {
+                    format!("{:.1}", value)
+                } else {
+                    value.to_string()
+                };
+                eval.code.push(format!("%{} = fadd double 0.0, {}", eval.register, s));
+                eval.register.var_type = Type::F64;
+            }
             Expression::Boolean { value, .. } => {
                 // Materialize boolean constant into a register
                 let int_val = if value { 1 } else { 0 };
@@ -1901,114 +1911,169 @@ impl<'a> LLVM<'a> {
 
                 let result_llvm_type = self.type_to_llvm(&result_type);
 
+                let is_float = matches!(result_type, Type::F32 | Type::F64);
                 match op.as_str() {
                     "+" => {
-                        eval.code.push(format!(
-                            "%{} = add {} %{}, %{}",
-                            eval.register, result_llvm_type, left_converted, right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fadd {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = add {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        }
                     }
                     "-" => {
-                        eval.code.push(format!(
-                            "%{} = sub {} %{}, %{}",
-                            eval.register, result_llvm_type, left_converted, right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fsub {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = sub {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        }
                     }
                     "*" => {
-                        eval.code.push(format!(
-                            "%{} = mul {} %{}, %{}",
-                            eval.register, result_llvm_type, left_converted, right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fmul {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = mul {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        }
                     }
                     "/" => {
-                        self.expect_signedness_match(
-                            &left_converted.var_type,
-                            &right_converted.var_type,
-                        );
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fdiv {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            self.expect_signedness_match(
+                                &left_converted.var_type,
+                                &right_converted.var_type,
+                            );
 
-                        let llvm_op = match &left_converted.var_type.is_signed() {
-                            true => "sdiv",
-                            false => "udiv",
-                        };
+                            let llvm_op = match &left_converted.var_type.is_signed() {
+                                true => "sdiv",
+                                false => "udiv",
+                            };
 
-                        eval.code.push(format!(
-                            "%{} = {} {} %{}, %{}",
-                            eval.register,
-                            llvm_op,
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
-                        ));
+                            eval.code.push(format!(
+                                "%{} = {} {} %{}, %{}",
+                                eval.register,
+                                llvm_op,
+                                result_llvm_type,
+                                left_converted,
+                                right_converted
+                            ));
+                        }
                     }
                     ">" => {
-                        eval.code.push(format!(
-                            "%{} = icmp {}gt {} %{}, %{}",
-                            eval.register,
-                            if self.type_is_signed(&eval.register.var_type) {
-                                "s"
-                            } else {
-                                "u"
-                            },
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp ogt {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp {}gt {} %{}, %{}",
+                                eval.register,
+                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                result_llvm_type,
+                                left_converted,
+                                right_converted
+                            ));
+                        }
                     }
                     "<" => {
-                        eval.code.push(format!(
-                            "%{} = icmp {}lt {} %{}, %{}",
-                            eval.register,
-                            if self.type_is_signed(&eval.register.var_type) {
-                                "s"
-                            } else {
-                                "u"
-                            },
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp olt {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp {}lt {} %{}, %{}",
+                                eval.register,
+                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                result_llvm_type,
+                                left_converted,
+                                right_converted
+                            ));
+                        }
                     }
                     ">=" => {
-                        eval.code.push(format!(
-                            "%{} = icmp {}ge {} %{}, %{}",
-                            eval.register,
-                            if self.type_is_signed(&eval.register.var_type) {
-                                "s"
-                            } else {
-                                "u"
-                            },
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp oge {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp {}ge {} %{}, %{}",
+                                eval.register,
+                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                result_llvm_type,
+                                left_converted,
+                                right_converted
+                            ));
+                        }
                     }
                     "<=" => {
-                        eval.code.push(format!(
-                            "%{} = icmp {}le {} %{}, %{}",
-                            eval.register,
-                            if self.type_is_signed(&eval.register.var_type) {
-                                "s"
-                            } else {
-                                "u"
-                            },
-                            result_llvm_type,
-                            left_converted,
-                            right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp ole {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp {}le {} %{}, %{}",
+                                eval.register,
+                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                result_llvm_type,
+                                left_converted,
+                                right_converted
+                            ));
+                        }
                     }
                     "==" => {
-                        eval.code.push(format!(
-                            "%{} = icmp eq {} %{}, %{}",
-                            eval.register, result_llvm_type, left_converted, right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp oeq {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp eq {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        }
 
                         eval.register.var_type = Type::Bool;
                     }
                     "!=" => {
-                        eval.code.push(format!(
-                            "%{} = icmp ne {} %{}, %{}",
-                            eval.register, result_llvm_type, left_converted, right_converted
-                        ));
+                        if is_float {
+                            eval.code.push(format!(
+                                "%{} = fcmp one {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = icmp ne {} %{}, %{}",
+                                eval.register, result_llvm_type, left_converted, right_converted
+                            ));
+                        }
 
                         eval.register.var_type = Type::Bool;
                     }
@@ -2029,12 +2094,18 @@ impl<'a> LLVM<'a> {
 
                 match op.as_str() {
                     "-" => {
-                        eval.code.push(format!(
-                            "%{} = sub {} 0, %{}",
-                            eval.register,
-                            inner_eval.register.llvm_type(),
-                            inner_eval.register
-                        ));
+                        let llvm_ty = inner_eval.register.llvm_type();
+                        if inner_eval.register.var_type.is_floating() {
+                            eval.code.push(format!(
+                                "%{} = fsub {} 0.0, %{}",
+                                eval.register, llvm_ty, inner_eval.register
+                            ));
+                        } else {
+                            eval.code.push(format!(
+                                "%{} = sub {} 0, %{}",
+                                eval.register, llvm_ty, inner_eval.register
+                            ));
+                        }
 
                         // Update the evaluation register's type
                         eval.register.var_type = inner_eval.register.var_type.clone();
@@ -2793,6 +2864,33 @@ impl<'a> LLVM<'a> {
             ("i8", "i16") => {
                 code.push(format!(
                     "%{} = sext {} %{} to {}",
+                    new_register, from_llvm, from_register, to_llvm
+                ));
+            }
+            // Integer to float
+            ("i32", "float") | ("i64", "float") | ("i32", "double") | ("i64", "double") => {
+                code.push(format!(
+                    "%{} = sitofp {} %{} to {}",
+                    new_register, from_llvm, from_register, to_llvm
+                ));
+            }
+            // Float to integer
+            ("float", "i32") | ("float", "i64") | ("double", "i32") | ("double", "i64") => {
+                code.push(format!(
+                    "%{} = fptosi {} %{} to {}",
+                    new_register, from_llvm, from_register, to_llvm
+                ));
+            }
+            // Float precision conversion
+            ("float", "double") => {
+                code.push(format!(
+                    "%{} = fpext {} %{} to {}",
+                    new_register, from_llvm, from_register, to_llvm
+                ));
+            }
+            ("double", "float") => {
+                code.push(format!(
+                    "%{} = fptrunc {} %{} to {}",
                     new_register, from_llvm, from_register, to_llvm
                 ));
             }

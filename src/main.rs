@@ -667,3 +667,71 @@ fn test_boolean() {
     "#;
     process(source, None, Some(1), false);
 }
+
+#[test]
+fn test_float_ops() {
+    let source = r#"
+    v: f32 = 3.14;
+    u: f64 = 100.0;
+
+    if u > v + 1.0 {
+        return 1;
+    }
+    
+    return 2;
+    "#;
+    process(source, None, Some(1), false);
+}
+
+#[test]
+fn test_int_to_float_1() {
+    let source = r#"
+    x: i32 = 5;
+    y: f32 = 10.0;
+
+    if x < y {
+        return 1;
+    }
+
+    return 2;
+    "#;
+    process(source, None, Some(1), false);
+}
+
+#[test]
+fn test_float_to_int_1() {
+    let source = r#"
+    x: f32 = 5.1;
+    y: i32 = 10;
+    z: i32 = x + y;
+
+    return z;
+    "#;
+    process(source, None, Some(15), false);
+}
+
+
+#[test]
+fn test_float_to_int_2() {
+    let source = r#"
+    x: f32 = 5.99;
+    y: i32 = 10;
+    z: i32 = x + y;
+
+    return z;
+    "#;
+    process(source, None, Some(15), false);
+}
+
+#[test]
+fn test_float_to_double() {
+    let source = r#"
+    x: f32 = 9.1;
+    y: f64 = 10.1;
+    z: f64 = x + y;
+
+    return z;
+    "#;
+    process(source, None, Some(19), false);
+
+}

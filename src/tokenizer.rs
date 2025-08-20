@@ -47,6 +47,7 @@ pub enum Token {
     Keyword(String),
     Identifier(String),
     Number(i64),
+    NumberFloat(f64),
     StringLiteral(String),
     Operator(String),
     Punctuation(String),
@@ -59,6 +60,7 @@ impl Display for Token {
             Token::Keyword(k) => k.clone(),
             Token::Identifier(s) => s.clone(),
             Token::Number(n) => n.to_string(),
+            Token::NumberFloat(n) => n.to_string(),
             Token::StringLiteral(s) => format!("\"{}\"", s),
             Token::Operator(op) => op.clone(),
             Token::Punctuation(p) => p.clone(),
@@ -71,6 +73,20 @@ impl Display for Token {
 pub fn conv(token: String) -> Token {
     if token.starts_with('"') && token.ends_with('"') {
         Token::StringLiteral(token[1..token.len() - 1].to_string())
+    } else if token.contains('.') {
+        if let Ok(num) = token.parse::<f64>() {
+            Token::NumberFloat(num)
+        } else if let Ok(num) = token.parse::<i64>() {
+            Token::Number(num)
+        } else if OPERATORS.contains(&token.as_str()) {
+            Token::Operator(token)
+        } else if PUNCTUATION.contains(&token.as_str()) {
+            Token::Punctuation(token)
+        } else if KEYWORDS.contains(&token.as_str()) {
+            Token::Keyword(token)
+        } else {
+            Token::Identifier(token)
+        }
     } else if let Ok(num) = token.parse::<i64>() {
         Token::Number(num)
     } else if OPERATORS.contains(&token.as_str()) {
@@ -218,6 +234,20 @@ pub fn tokenize_line(
                 /////////////////////////////
                 // Operators and punctuation
                 /////////////////////////////
+
+                // Special-case '.' to decide if it's part of a float literal or punctuation
+                if ch == '.' {
+                    // If current token is a number (digits only), treat '.' as part of a float literal
+                    let is_numeric_token =
+                        !token.is_empty() && token.chars().all(|c| c.is_ascii_digit());
+                    if is_numeric_token {
+                        if token.is_empty() {
+                            token_start = Some(*cursor - ch.len_utf8());
+                        }
+                        token.push(ch);
+                        continue;
+                    }
+                }
 
                 if OPERATORS.contains(&ch.to_string().as_str())
                     || PUNCTUATION.contains(&ch.to_string().as_str())
