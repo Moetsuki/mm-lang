@@ -798,7 +798,17 @@ impl<'a> LLVM<'a> {
                     self.source.caret(*span);
  
                     // Path return analysis
-                    let all_paths_return = self.all_paths_return(&then_block.statements)
+                    //
+                    // Omit done_label if all paths return a value and theres an else statement to
+                    // jump over from.
+                    //
+                    // If we don't check for this, functions that only include if .. else and
+                    // return in both cases will generate a done label without an instruction at
+                    // the end which is illegal llvm ir.
+                    //
+                    // And if we dont check that an `else` exists, a single if with a return
+                    // statement will generate two labels for jumping over the `else` block
+                    let omit_done_label = self.all_paths_return(&then_block.statements)
                         && elif.iter().all(|e| {
                             if let Statement::If { then_block, .. } = e.as_ref() {
                                 self.all_paths_return(&then_block.statements)
@@ -808,19 +818,19 @@ impl<'a> LLVM<'a> {
                         })
                         && else_block
                             .as_ref()
-                            .map_or(true, |b| self.all_paths_return(&b.statements))
+                            .is_none_or(|b| self.all_paths_return(&b.statements))
                         && else_block.is_some();
 
-                    println!("all_paths_return: {}", all_paths_return);
+                    println!("all_paths_return: {}", omit_done_label);
 
                     // Create labels
                     let true_label = format!("if_true_{}", eval.register.id);
                     let false_label = format!("if_false_{}", eval.register.id);
                     let done_label = format!("if_done_{}", eval.register.id);
-                    let mut elif_labels : Vec<String> = elif
+                    let mut elif_labels: Vec<String> = elif
                         .iter()
                         .enumerate()
-                        .map(|(i,_)| format!("if_elif_{}_{}", i, eval.register.id))
+                        .map(|(i, _)| format!("if_elif_{}_{}", i, eval.register.id))
                         .collect();
 
                     println!("elif_labels: {:?}", elif_labels);
@@ -851,16 +861,18 @@ impl<'a> LLVM<'a> {
                         true_label,
                         format!("if_fallthrough_{}", eval.register.id)
                     ));
-                    eval.code.push(format!("if_fallthrough_{}:", eval.register.id));
+                    eval.code
+                        .push(format!("if_fallthrough_{}:", eval.register.id));
 
                     // Try `else if` conditions, falling through sequentially
-                    elif.iter().zip(elif_labels.iter()).enumerate().for_each(|(i, (e, label))| {
+                    elif.iter()
+                        .zip(elif_labels.iter())
+                        .enumerate()
+                        .for_each(|(i, (e, label))| {
                         match e.as_ref() {
-                           Statement::If{ condition, .. } => { 
+                                Statement::If { condition, .. } => {
                                 let cond = self.transform_expression(condition.clone());
-                                eval.code
-                                    .instructions
-                                    .extend(cond.code.instructions);
+                                    eval.code.instructions.extend(cond.code.instructions);
 
                                 // Compare condition with zero
                                 let cmp_reg = Register::new(Type::Bool);
@@ -876,9 +888,14 @@ impl<'a> LLVM<'a> {
                                     label,
                                     format!("else_{}_fallthrough_{}", i, eval.register.id)
                                 ));
-                                eval.code.push(format!("else_{}_fallthrough_{}:", i, eval.register.id));
+                                    eval.code.push(format!(
+                                        "else_{}_fallthrough_{}:",
+                                        i, eval.register.id
+                                    ));
                             }
-                            _ => panic!("Unsupported statement, expected `else if` got {:?}", *e),
+                                _ => {
+                                    panic!("Unsupported statement, expected `else if` got {:?}", *e)
+                                }
                         }
                     });
 
@@ -899,20 +916,22 @@ impl<'a> LLVM<'a> {
                     // block return a value. Check with self.all_paths_return(..)
 
                     // Else if blocks
-                    elif.iter().zip(elif_labels.iter()).for_each(|(e, label)| {
-                        match e.as_ref() {
-                            Statement::If{ then_block, .. } => {
+                    elif.iter()
+                        .zip(elif_labels.iter())
+                        .for_each(|(e, label)| match e.as_ref() {
+                            Statement::If { then_block, .. } => {
                                 eval.code.push(format!("{}:", label));
                                 let else_elseif_eval = self
                                     .transform_block(&then_block.statements.clone())
                                     .expect("Failed to compile else/else_if block");
-                                eval.code.instructions.extend(else_elseif_eval.code.instructions);
-                                if !all_paths_return {
+                                eval.code
+                                    .instructions
+                                    .extend(else_elseif_eval.code.instructions);
+                                if !omit_done_label {
                                     eval.code.push(format!("br label %{}", done_label));
                                 }
                             }
                             _ => panic!("Unsupported statement, expected `else if` got {:?}", *e),
-                        }
                     });
 
                     // Else block
@@ -923,10 +942,9 @@ impl<'a> LLVM<'a> {
                             .expect("Failed to compile else-statements block");
                         eval.code.instructions.extend(else_eval.code.instructions);
                     }
-                    if !all_paths_return {
+                    if !omit_done_label {
                         eval.code.push(format!("br label %{}", done_label));
                     }
-                    
 
                     // True block
                     eval.code.push(format!("{}:", true_label));
@@ -934,11 +952,11 @@ impl<'a> LLVM<'a> {
                         .transform_block(&then_block.statements)
                         .expect("Failed to compile true-statements block");
                     eval.code.instructions.extend(then_eval.code.instructions);
-                    if !all_paths_return {
+                    if !omit_done_label {
                         eval.code.push(format!("br label %{}", done_label));
                     }
 
-                    if !all_paths_return {
+                    if !omit_done_label {
                         eval.code.push(format!("{}:", done_label));
                     }
                 }
