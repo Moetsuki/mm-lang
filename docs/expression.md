@@ -13,16 +13,18 @@ The expression module (`expression.rs`) defines the core expression types and ev
 ```rust
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Variable(Variable),
-    Number(i64),
-    StringLiteral(String),
-    Boolean(bool),
-    Cast { expr: Box<Expression>, target_type: Type },
-    BinaryOp { op: String, left: Box<Expression>, right: Box<Expression> },
-    UnaryOp { op: String, expr: Box<Expression> },
-    Call { callee: Box<Expression>, args: Vec<Expression> },
-    MethodCall { object: Box<Expression>, method: String, args: Vec<Expression> },
-    FieldAccess { object: Box<Expression>, field: String },
+    Variable { var: Variable, span: Span },
+    Number { value: i64, span: Span },
+    StringLiteral { value: String, span: Span },
+    InitializerList { elements: Vec<Expression>, span: Span },
+    Boolean { value: bool, span: Span },
+    Cast { expr: Box<Expression>, target_type: Type, span: Span },
+    BinaryOp { op: String, left: Box<Expression>, right: Box<Expression>, span: Span },
+    UnaryOp { op: String, expr: Box<Expression>, span: Span },
+    Call { callee: Box<Expression>, args: Vec<Expression>, span: Span },
+    MethodCall { object: Box<Expression>, method: String, args: Vec<Expression>, span: Span },
+    FieldAccess { object: Box<Expression>, field: String, span: Span },
+    ArrayAccess { array: Box<Expression>, index: Box<Expression>, span: Span },
 }
 ```
 
@@ -64,6 +66,7 @@ false
 - Simple boolean values
 - Used in conditional expressions
 - Result of comparison operations
+- Note: boolean literals aren't tokenized yet; booleans are produced by comparisons today.
 
 ### 2. Variable Expressions
 
@@ -154,6 +157,9 @@ printf("hi");             // Call
 obj.field = 5;             // FieldAccess + store
 obj.method(1, 2);          // MethodCall via vtable
 n: i32 = (x as i32);       // Cast
+arr: tensor[i64] = {1, 2, 3};
+arr[1] = 5;                // ArrayAccess + store
+sum = arr[0] + arr[2];     // ArrayAccess + loads
 ```
 
 ## Operator Precedence
@@ -164,7 +170,7 @@ Expressions are parsed with proper operator precedence:
 2. High: Multiplicative (`*`, `/`, `%`)
 3. Medium: Additive (`+`, `-`)
 4. Low: Comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
-5. Assignments are statements, not expressions.
+5. Assignments are statements, not expressions. Indexing `expr[ i ]` has higher precedence than calls and field access.
 
 ## Usage in Code Generation (high level)
 
@@ -181,4 +187,4 @@ Type mismatches and unsupported operations panic with helpful context during dev
 
 ## Future Enhancements
 
-- Array access `arr[i]`, ternary operator, lambda/closures, and short-circuit logical ops.
+- Ternary operator, lambda/closures, short-circuit logical ops, boolean literals.

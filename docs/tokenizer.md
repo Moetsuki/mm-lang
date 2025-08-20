@@ -24,7 +24,7 @@ pub enum Token {
 
 ### Constants (as implemented)
 
-- KEYWORDS: `["if","else","while","for","function","return","as","object","class","entity","component","system","static","dynamic","public","private","protected","init","destroy"]`
+- KEYWORDS: `["if","else","while","for","function","return","as","object","class","entity","component","system","static","dynamic","public","private","protected","init","destroy","tensor"]`
 - OPERATORS: `["+","-","*","/","%","=","==","!=","<",">","<=",">="]`
 - PUNCTUATION: `["(",")","{","}","[","]",";",",",".",":","->"]`
 

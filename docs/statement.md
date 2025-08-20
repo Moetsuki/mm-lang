@@ -13,15 +13,15 @@ The statement module (`statement.rs`) defines the core statement types that repr
 ```rust
 #[derive(Debug, Clone)]
 pub enum Statement {
-    VariableDecl { identifier: Variable, value: Expression },
-    Assignment { identifier: Expression, value: Expression },
-    Call { callee: Expression, args: Vec<Expression> },
-    If { condition: Expression, then_block: Block, else_block: Option<Block> },
-    Function { name: String, ret_type: Type, params: Vec<Variable>, body: Block },
-    Block { body: Block },
-    Return { value: Expression },
-    Class { name: String, parent: Option<String>, fields: Vec<(Variable, Visibility)>, methods: Vec<(Box<Statement>, Visibility)> },
-    Struct { id: u64, name: String, parent: Option<Box<Statement>>, fields: Vec<Variable> },
+    VariableDecl { identifier: Variable, value: Expression, span: Span },
+    Assignment { identifier: Expression, value: Expression, span: Span },
+    Call { callee: Expression, args: Vec<Expression>, span: Span },
+    If { condition: Expression, then_block: Block, elif: Vec<Statement>, else_block: Option<Block>, span: Span },
+    Function { name: String, ret_type: Type, params: Vec<Variable>, body: Block, span: Span },
+    Block { body: Block, span: Span },
+    Return { value: Expression, span: Span },
+    Class { name: String, parent: Option<String>, fields: Vec<(Variable, Visibility)>, methods: Vec<(Box<Statement>, Visibility)>, span: Span },
+    Struct { id: u64, name: String, parent: Option<Box<Statement>>, fields: Vec<Variable>, span: Span },
 }
 ```
 
@@ -53,7 +53,7 @@ VariableDecl {
 ```mm
 x = 5;
 result = x + y * 2;
-array[index] = value;    // Planned
+arr[index] = value;    // Supported
 ```
 
 **Structure:**
@@ -238,6 +238,7 @@ impl Display for Statement {
 x = 42;                     // Assignment(Variable::<i64>(x), Number(42))
 print("hello");             // Call(Variable(print), [StringLiteral(hello)])
 return x + y;              // Return(BinaryOp(Variable(x) + Variable(y)))
+arr[1] = 99;               // Assignment(ArrayAccess(arr, 1), Number(99))
 ```
 
 ### Complex Statements

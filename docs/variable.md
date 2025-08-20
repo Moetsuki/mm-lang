@@ -76,9 +76,9 @@ let active: bool = true;        // Boolean
 let message: string = "hello";  // String
 ```
 
-#### Advanced Types (Planned)
+#### Advanced Types
 ```mm
-let items: array<i64> = [1, 2, 3];           // Array type
+let items: tensor[i64] = {1, 2, 3};          // Tensor type (1-D)
 let callback: function(i64) -> bool = check;  // Function type
 let custom: UserDefined = UserDefined::new();       // User-defined type
 ```

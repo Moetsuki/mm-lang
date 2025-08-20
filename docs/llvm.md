@@ -408,7 +408,7 @@ fn type_to_llvm(&self, t: &Type) -> String {
                 .join(", ");
             format!("{} ({})*", self.type_to_llvm(ret), param_types)
         }
-        Type::Array(elem_type) => format!("{}*", self.type_to_llvm(elem_type)),
+    // Tensors lower to pointers to element type in codegen paths
         Type::UserDefined(_) => "i8*".to_string(),
         Type::ToBeEvaluated => "i8*".to_string(),
     }
@@ -525,7 +525,7 @@ The code generator provides helpful error messages with context:
 ### Advanced Features
 
 - **Function definitions**: User-defined functions
-- **Array operations**: Indexing and manipulation
+- **Tensor operations**: Indexing and manipulation
 - **Memory management**: Automatic cleanup
 - **Optimization passes**: Dead code elimination, constant propagation
 - **Debug information**: Line number preservation

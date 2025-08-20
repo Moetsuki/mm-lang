@@ -22,7 +22,7 @@ pub enum Type {
     String,
     Void,
     Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool },
-    Array(Box<Type>),
+    Tensor { var_type: Box<Type>, dimensions: Vec<usize> },
     Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Box<Type>, Visibility)>, methods: Vec<(Box<Type>, Visibility)> },
     Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Box<Type>> },
     UserDefined(String, Box<Type>),
@@ -140,14 +140,14 @@ Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool
 ### Array Types
 
 ```mm
-let numbers: array<i64> = [1, 2, 3, 4, 5];
-let names: array<string> = ["Alice", "Bob", "Charlie"];
-let matrix: array<array<f64>> = [[1.0, 2.0], [3.0, 4.0]];
+let numbers: tensor<i64> = {1, 2, 3, 4, 5};
+let names: tensor<string> = {"Alice", "Bob", "Charlie"};
+let matrix: tensor<tensor<f64>> = {{1.0, 2.0}, {3.0, 4.0}};
 ```
 
 **Structure:**
 ```rust
-Array(Box<Type>)
+Tensor { var_type: Box<Type>, dimensions: Vec<usize> }
 //    element_type
 ```
 ### User‑Defined/Composite Types
@@ -181,7 +181,7 @@ impl Display for Type {
                 params.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "),
                 ret.to_string()
             ),
-            Type::Array(elem_type) => format!("array<{}>", elem_type.to_string()),
+            Type::Tensor { var_type, dimensions } => format!("tensor[{:?};{:?}]", var_type, dimensions),
             Type::UserDefined(name) => name.clone(),
             // ... other types
         };
@@ -241,8 +241,8 @@ impl Type {
                 r1.is_compatible(r2)
             }
             
-            // Array compatibility
-            (Type::Array(e1), Type::Array(e2)) => e1.is_compatible(e2),
+            // Tensor compatibility (same element type)
+            (Type::Tensor { var_type: e1, .. }, Type::Tensor { var_type: e2, .. }) => e1 == e2,
             
             _ => false,
         }
@@ -386,9 +386,7 @@ impl Type {
                     .join(", ");
                 format!("{} ({})*", ret.to_llvm(), param_types)
             }
-            Type::Array(elem_type) => {
-                format!("{}*", elem_type.to_llvm())  // Pointer to elements
-            }
+            // Tensors lower to element pointers in codegen paths
             Type::UserDefined(_) => "i8*".to_string(),  // Generic pointer
             Type::ToBeEvaluated => "i8*".to_string(), // Placeholder
         }

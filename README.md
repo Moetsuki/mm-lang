@@ -4,9 +4,9 @@ A small, statically typed language compiler written in Rust that lowers to LLVM 
 
 ## Overview
 
-MM‑Lang has a C/Rust‑inspired surface syntax. As of now, all tests pass and core language features are implemented end‑to‑end (tokenize → parse → codegen → link → run).
+MM‑Lang has a C/Rust‑inspired surface syntax. Core features work end‑to‑end (tokenize → parse → codegen → link → run).
 
-Test status: 16 passed, 0 failed (via `cargo test`).
+Test status: 27 passed, 0 failed (via `cargo test -q`).
 
 ### Fully working (tested)
 - Variable declarations with explicit types and assignments
@@ -21,11 +21,16 @@ Test status: 16 passed, 0 failed (via `cargo test`).
     - Constructors via `init(...) { ... }`
     - Field access (`obj.field`) and assignment
     - Method calls with dynamic dispatch via per‑class vtables
+- Tensors (contiguous buffers):
+    - Declaration syntax: `arr: tensor[i64] = {1, 2, 3};`
+    - Element indexing and assignment: `arr[1]`, `arr[0] = 42;`
+    - Lowered to stack allocations with `getelementptr` for element access
+- Else‑if chains: `if ... else if ... else ...`
 
 ### Known limitations (current behavior)
 - Visibility keywords are parsed and preserved in types, but enforcement is not performed yet.
-- Numeric literals are integers; float literals aren’t tokenized yet (float types exist for future use).
-- Arrays, modules/imports, pattern matching, and generics are not implemented.
+- Numeric literals are integers; float literals aren’t tokenized yet (float types exist for future use). Boolean literals (`true`/`false`) are not tokenized yet, but boolean results are produced by comparisons.
+- Modules/imports, pattern matching, and generics are not implemented.
 - Error reporting is panic‑driven and aimed at development use.
 
 ## Core Features
@@ -37,6 +42,7 @@ Primitive/built‑in:
 Composite and compiler types used in codegen:
 - `function name(args...) -> ret` (first‑class function type)
 - `class Name [: Parent] { fields, methods }` (lowered to `%Name` with `%NameVTable`)
+- `tensor[T]` contiguous buffer (1‑D today)
 - `ptr<T>` pointers (used internally in codegen and interop)
 
 ### Variable Declarations / Assignment ✅
@@ -93,6 +99,16 @@ msg: string = "Hello, World!";
 printf(msg);
 ```
 `printf` is declared automatically with a variadic signature. Additional C bindings provided: `scanf`, `malloc`, `free`.
+
+### Tensors ✅
+Contiguous buffers with initializer lists and indexing.
+
+```mm
+arr: tensor[i64] = {11, 22, 33};
+sum: i64 = arr[0] + arr[1] + arr[2];
+arr[1] = 44;
+```
+Lowered to stack allocations with per‑element stores/loads using `getelementptr`.
 
 ## Classes ✅
 Single inheritance with fields, methods, and constructors. Dynamic dispatch is implemented via per‑class VTables.
@@ -171,7 +187,7 @@ statement        = variable_decl
 block            = "{" { statement } "}" ;
 
 variable_decl    = identifier ":" type "=" expression ";" ;
-assignment       = expression "=" expression ";" ;
+assignment       = (identifier | field_access | array_access) "=" expression ";" ;
 return_statement = "return" expression ";" ;
 expression_stmt  = expression ";" ;
 
@@ -189,16 +205,19 @@ field_decl       = identifier ":" type ";" ;
 method_def       = "function" identifier "(" [ param_list ] ")" "->" type block ;
 init_block       = "init" "(" [ param_list ] ")" block ;
 
-if_statement     = "if" expression block [ "else" block ] ;
+if_statement     = "if" expression block { "else" "if" expression block } [ "else" block ] ;
 
-expression       = method_call
+expression       = initializer_list
+                 | method_call
                  | call
                  | field_access
+                 | array_access
                  | binary ;
 
 method_call      = primary "." identifier "(" [ arg_list ] ")" ;
 field_access     = primary "." identifier ;
 call             = primary "(" [ arg_list ] ")" ;
+array_access     = primary "[" expression "]" ;
 arg_list         = expression { "," expression } ;
 
 binary           = unary { bin_op unary } ;
@@ -207,8 +226,10 @@ primary          = number
                  | string_literal
                  | identifier
                  | cast
-                 | "(" expression ")" ;
+                 | "(" expression ")"
+                 | initializer_list ;
 cast             = primary "as" type ;
+initializer_list = "{" [ expression { "," expression } ] "}" ;
 
 bin_op           = "+" | "-" | "*" | "/" | "%" |
                    "==" | "!=" | "<" | ">" | "<=" | ">=" ;
@@ -216,6 +237,7 @@ bin_op           = "+" | "-" | "*" | "/" | "%" |
 type             = "bool" | "i8" | "i16" | "i32" | "i64" |
                    "u8" | "u16" | "u32" | "u64" |
                    "f32" | "f64" | "string" | "none" |
+                   "tensor" "[" type "]" |
                    identifier ;
 ```
 All listed grammar constructs are parsed and code‑generated as described above.
@@ -232,11 +254,17 @@ mm-lang/
 │   ├── block.rs         # Block container
 │   ├── variable.rs      # Variable representation
 │   ├── types.rs         # Type enum / helpers
-│   └── llvm.rs          # LLVM IR generation backend
+│   ├── llvm.rs          # LLVM IR generation backend
+│   ├── backtrace.rs     # Helper for caller tracing in logs
+│   ├── span.rs          # Source span tracking
+│   └── file.rs          # Source file abstraction
 ├── docs/                # Design notes
 ├── Cargo.toml
 └── README.md
 ```
+
+## Prerequisites
+- Clang must be available on PATH (used to compile LLVM IR to native executable).
 
 ## Building
 ```bash
@@ -261,11 +289,11 @@ cargo run
 Run the test suite to see current implementation status:
 
 ```bash
-cargo test
+cargo test -q
 ```
 
 ### Test Results Overview
-- Passing: 16/16
+- Passing: 27/27
 
 ### Individual Tests
 - `test_variable_declaration` ✅
@@ -274,16 +302,27 @@ cargo test
 - `test_coercion` ✅
 - `test_unary_op` ✅
 - `test_unary_op_const` ✅
+- `test_operator_comp` ✅
+- `test_precedence_1` ✅
+- `test_precedence_2` ✅
 - `test_if_statement` ✅
+- `test_if_else` ✅
+- `test_if_else_elseif` ✅
+- `test_if_else_elseif_2` ✅
+- `test_if_ex` ✅
+- `test_if_nx` ✅
 - `test_block` ✅
 - `test_printf` ✅
 - `test_function` ✅
 - `test_function_call` ✅
+- `test_arithmetic_expression` ✅
+- `test_fibonacci` ✅
 - `test_simple_class` ✅
 - `test_simple_inheritance` ✅
 - `test_simple_constructor` ✅
 - `test_class` ✅
 - `test_method_call` ✅
+- `test_tensor` ✅
 
 ## Roadmap
 
@@ -298,10 +337,11 @@ cargo test
 - [x] Class parsing (fields, visibility, methods, inheritance)
 - [x] Constructors (`init`) and object construction
 - [x] VTable generation and dynamic method dispatch
+- [x] Tensors with initializer lists and indexing (1‑D)
 
 ### 🚧 In Progress
 - [ ] Visibility enforcement
-- [ ] Float literals, arrays, modules/imports
+- [ ] Float literals, modules/imports
 - [ ] Improved diagnostics
 - [ ] Extended standard library bindings
 
@@ -340,7 +380,7 @@ Highlights:
 - [x] Casts with `as`, implicit integer widening
 - [x] Basic I/O (`printf`)
 - [ ] Float literals
-- [ ] Arrays and slices
+- [ ] Multi‑dimensional tensors and slices
 - [ ] Modules/imports
 - [ ] Pattern matching
 - [ ] Generics and parametric polymorphism  
@@ -350,7 +390,7 @@ Highlights:
 
 ### Implementation Status
 - ✅ Complete: Basic expressions, variables, control flow, type ops, functions, and classes (incl. constructors, method calls, inheritance)
-- 🚧 Partial: Visibility enforcement, float literals
+- 🚧 Partial: Visibility enforcement, float literals, tensor ergonomics
 - 📋 Planned: Items listed above
 
 ## Contact
