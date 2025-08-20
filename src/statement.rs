@@ -34,7 +34,7 @@ pub enum Statement {
     If {
         condition: Expression,
         then_block: Block,
-        elif: Vec<Box<Statement>>,
+        elif: Vec<Statement>,
         else_block: Option<Block>,
         span: Span,
     },

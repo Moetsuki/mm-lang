@@ -200,7 +200,7 @@ impl<'a> Ast<'a> {
                                     && end_bracket_token.token
                                         == Token::Punctuation("]".to_string())
                                 {
-                                    let eb = end_bracket_token.span.clone();
+                                    let eb = end_bracket_token.span;
                                     self.next_token(); // consume ']'
                                     eb
                                 } else {
@@ -308,7 +308,7 @@ impl<'a> Ast<'a> {
                     total_span = then_block.span().unwrap_or(total_span).join(total_span);
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
-                    let mut elif: Vec<Box<Statement>> = vec![];
+                    let mut elif: Vec<Statement> = vec![];
 
                     // We return the else block if available and push all `else if` blocks into the
                     // vector above to deduplicate logic.
@@ -340,13 +340,13 @@ impl<'a> Ast<'a> {
                                 total_span.join(else_elif_block.span().unwrap_or(total_span));
 
                             if is_elif {
-                                elif.push(Box::new(Statement::If {
+                                elif.push(Statement::If {
                                     condition: else_if_cond.unwrap(),
                                     then_block: else_elif_block,
                                     elif: vec![],
                                     else_block: None,
                                     span: sub_total_span,
-                                }));
+                                });
                                 continue; // continue parsing for more else else_if blocks
                             }
 
@@ -867,7 +867,7 @@ impl<'a> Ast<'a> {
         let lexical_token_span = if let Some(lexical_token) = self.peek_token()
             && lexical_token.token == Token::Punctuation("{".to_string())
         {
-            let sp = lexical_token.span.clone();
+            let sp = lexical_token.span;
             self.next_token(); // consume '{'
             sp
         } else {
@@ -875,7 +875,7 @@ impl<'a> Ast<'a> {
             // next syntactical construct in precedence
         };
 
-        let mut token_span = lexical_token_span.clone();
+        let mut token_span = lexical_token_span;
 
         while let Some(lexical_token) = self.peek_token() {
             if lexical_token.token == Token::Punctuation("}".to_string()) {

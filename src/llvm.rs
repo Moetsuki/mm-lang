@@ -943,7 +943,7 @@ impl<'a> LLVM<'a> {
                     // statement will generate two labels for jumping over the `else` block
                     let omit_done_label = self.all_paths_return(&then_block.statements)
                         && elif.iter().all(|e| {
-                            if let Statement::If { then_block, .. } = e.as_ref() {
+                            if let Statement::If { then_block, .. } = e {
                                 self.all_paths_return(&then_block.statements)
                             } else {
                                 false
@@ -1002,7 +1002,7 @@ impl<'a> LLVM<'a> {
                         .zip(elif_labels.iter())
                         .enumerate()
                         .for_each(|(i, (e, label))| {
-                            match e.as_ref() {
+                            match e {
                                 Statement::If { condition, .. } => {
                                     let cond = self.transform_expression(condition.clone());
                                     eval.code.instructions.extend(cond.code.instructions);
@@ -1051,7 +1051,7 @@ impl<'a> LLVM<'a> {
                     // Else if blocks
                     elif.iter()
                         .zip(elif_labels.iter())
-                        .for_each(|(e, label)| match e.as_ref() {
+                        .for_each(|(e, label)| match e {
                             Statement::If { then_block, .. } => {
                                 eval.code.push(format!("{}:", label));
                                 let else_elseif_eval = self
