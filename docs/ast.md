@@ -11,10 +11,14 @@ The AST (Abstract Syntax Tree) parser module (`ast.rs`) is responsible for conve
 ### Ast Structure
 
 ```rust
-pub struct Ast {
+pub struct Ast<'a> {
     tokens: Vec<LexicalToken>,
     pos: usize,
     tree: Option<Block>,
+    source_file: &'a SourceFile,
+    // Track known type names to disambiguate constructs during parsing
+    class_names: HashSet<String>,
+    struct_names: HashSet<String>,
 }
 ```
 
@@ -53,20 +57,22 @@ Main parsing entry point that processes the entire token stream and returns the 
 #### `parse_expr(&mut self) -> Expression`
 Parses expressions using operator precedence rules.
 
-**Precedence levels:**
-1. **Lowest**: Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`)
-2. **Medium**: Addition/subtraction (`+`, `-`)
-3. **Highest**: Multiplication/division (`*`, `/`)
+Expressions use precedence climbing from lowest to highest:
+1. Logical OR (`||`)
+2. Logical AND (`&&`)
+3. Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+4. Additive (`+`, `-`)
+5. Term (`*`, `/`)
+6. Cast (`as`)
+7. Unary (`-`, `!`)
+8. Postfix (indexing, calls, field/method access)
+9. Factor/primary
 
 #### `parse_term(&mut self) -> Expression`
 Handles higher precedence operations (multiplication, division).
 
 #### `parse_factor(&mut self) -> Expression`
-Handles the highest precedence elements:
-- Numbers
-- String literals
-- Identifiers (variables)
-- Parenthesized expressions
+Handles the highest precedence elements (literals and identifiers) and now also supports struct literals when an `Identifier` is immediately followed by `{` and the identifier is a known struct name.
 
 ## Statement Parsing
 
@@ -115,6 +121,24 @@ if condition {
 6. Create If statement
 
 ### Function Calls
+### Struct Declarations
+```mm
+struct Point {
+    x: i32,
+    y: i32,
+}
+```
+
+Characteristics:
+- Accepts `,` or `;` separators, trailing comma allowed
+- Optional trailing semicolon after the closing `}`
+
+### Struct Literals
+```mm
+Point { x: 1, y: 2 }
+```
+
+Disambiguation: the parser records struct names when encountered so that `Identifier {` is only parsed as a struct literal if the identifier is a known struct name (avoids mis-parsing `if x < y {` as a struct literal after `y`).
 ```mm
 function_name(arg1, arg2, arg3);
 ```
@@ -128,7 +152,7 @@ function_name(arg1, arg2, arg3);
 
 The parser uses recursive descent with operator precedence to handle complex expressions:
 
-### Binary Operations
+### Binary and Logical Operations
 ```mm
 x + y * z    // Parsed as: x + (y * z)
 a == b + c   // Parsed as: a == (b + c)
@@ -150,9 +174,9 @@ variable_name  // References to previously declared variables
 Parses type annotations used in function parameters and return types.
 
 **Supported types:**
-- Built-in types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`
-- User-defined types: Custom type names
-- Generic handling: Falls back to `UserDefined` for unknown types
+- Built-in types: `bool`, `i8/i16/i32/i64`, `u8/u16/u32/u64`, `f32`, `f64`, `string`, `none`
+- Composite: `tensor[T]`, `class`, `struct`
+- User-defined names resolve to class/struct in later stages; unknown types error
 
 ## Error Handling
 

@@ -15,6 +15,7 @@ The expression module (`expression.rs`) defines the core expression types and ev
 pub enum Expression {
     Variable { var: Variable, span: Span },
     Number { value: i64, span: Span },
+    Float { value: f64, span: Span },
     StringLiteral { value: String, span: Span },
     InitializerList { elements: Vec<Expression>, span: Span },
     Boolean { value: bool, span: Span },
@@ -25,6 +26,7 @@ pub enum Expression {
     MethodCall { object: Box<Expression>, method: String, args: Vec<Expression>, span: Span },
     FieldAccess { object: Box<Expression>, field: String, span: Span },
     ArrayAccess { array: Box<Expression>, index: Box<Expression>, span: Span },
+    StructLiteral { name: String, fields: Vec<(String, Expression)>, span: Span },
 }
 ```
 
@@ -56,6 +58,16 @@ pub enum Expression {
 - Enclosed in double quotes
 - Support for basic content (escape sequences planned)
 
+#### Float Literals
+```mm
+3.14
+10.0
+```
+
+**Characteristics:**
+- Lowered to `double` (f64) currently
+- Mixed int/float expressions promote to float
+
 #### Boolean Literals
 ```mm
 true
@@ -65,8 +77,7 @@ false
 **Characteristics:**
 - Simple boolean values
 - Used in conditional expressions
-- Result of comparison operations
-- Note: boolean literals aren't tokenized yet; booleans are produced by comparisons today.
+- Result of comparison operations and logical ops
 
 ### 2. Variable Expressions
 
@@ -95,6 +106,13 @@ x % y       // Modulo (planned)
 ```
 
 #### Comparison Operations
+#### Logical Operations
+```mm
+a && b
+a || b
+```
+
+Currently eager (both sides evaluated). Produces boolean (`i1`).
 ```mm
 x == y      // Equality
 a != b      // Inequality
@@ -129,6 +147,7 @@ UnaryOp {
 - Function calls: `Call { callee, args }`, where `callee` is often a `Variable`. Constructors use the class name; the `init` method is resolved during codegen.
 - Field access: `FieldAccess { object, field }` compiles to `getelementptr` + `load/store` with the class layout (vtable at index 0, fields starting at index 1).
 - Method calls: `MethodCall { object, method, args }` use dynamic dispatch via a per-class vtable.
+- Struct literals: `StructLiteral { name, fields }` allocate a temporary struct on the stack and initialize provided fields.
 
 ## Display Implementation
 
@@ -142,6 +161,7 @@ The module implements `Display` in code for human-friendly debugging output.
 "hello"                     // StringLiteral(hello)
 x                           // Variable::<i64>(x)
 true                        // Boolean(true)
+3.14                        // Float(3.14)
 ```
 
 ### Complex Expressions
@@ -160,25 +180,32 @@ n: i32 = (x as i32);       // Cast
 arr: tensor[i64] = {1, 2, 3};
 arr[1] = 5;                // ArrayAccess + store
 sum = arr[0] + arr[2];     // ArrayAccess + loads
+Point { x: 1, y: 2 }.x      // StructLiteral + FieldAccess
 ```
 
 ## Operator Precedence
 
-Expressions are parsed with proper operator precedence:
+Expressions are parsed with proper operator precedence (from lowest to highest):
 
-1. Highest: Unary operators (`-`, `!`)
-2. High: Multiplicative (`*`, `/`, `%`)
-3. Medium: Additive (`+`, `-`)
-4. Low: Comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
-5. Assignments are statements, not expressions. Indexing `expr[ i ]` has higher precedence than calls and field access.
+1. Logical OR (`||`)
+2. Logical AND (`&&`)
+3. Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+4. Additive (`+`, `-`)
+5. Multiplicative (`*`, `/`, `%`)
+6. Casting (`as` binds after unary)
+7. Unary (`-`, `!`)
+8. Postfix (indexing, calls, field/method access)
+9. Primary (literals, variables, parenthesized)
+
+Assignments are statements, not expressions.
 
 ## Usage in Code Generation (high level)
 
-- Arithmetic/compare: integer ops; implicit integer widening or explicit casts inserted.
+- Arithmetic/compare: integer ops; implicit integer widening or explicit casts inserted (floats use `fadd/fsub/fmul/fdiv` and `fcmp`).
 - Casts: `sext`/`trunc`/`zext`/`sitofp`/`fptosi`/`fpext`/`fptrunc`.
 - Strings: private globals with `getelementptr` to C string pointer.
 - Calls: free functions directly; constructors via resolved `init` method.
-- Field access: `getelementptr` with index +1 (skip vtable), then `load`/`store`.
+- Field access: `getelementptr` with index +1 for classes (skip vtable) and direct index for structs, then `load`/`store`.
 - Method calls: dynamic dispatch via vtable pointer loaded from the object.
 
 ## Error Handling
@@ -187,4 +214,4 @@ Type mismatches and unsupported operations panic with helpful context during dev
 
 ## Future Enhancements
 
-- Ternary operator, lambda/closures, short-circuit logical ops, boolean literals.
+- Ternary operator, lambda/closures, short-circuit logical ops.

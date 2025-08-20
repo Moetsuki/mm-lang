@@ -13,7 +13,7 @@ The type system module (`types.rs`) defines the core type system for MM-Lang, pr
 ### Core Type Enum (current)
 
 ```rust
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Type {
     Bool,
     I8, I16, I32, I64,
@@ -22,9 +22,9 @@ pub enum Type {
     String,
     Void,
     Function { name: String, args: Vec<Type>, ret_type: Box<Type>, is_variadic: bool },
+    Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Type, Visibility)>, methods: Vec<(Type, Visibility)> },
+    Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Type> },
     Tensor { var_type: Box<Type>, dimensions: Vec<usize> },
-    Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Box<Type>, Visibility)>, methods: Vec<(Box<Type>, Visibility)> },
-    Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Box<Type>> },
     UserDefined(String, Box<Type>),
     Pointer(Box<Type>),
     ToBeEvaluated(String),
@@ -80,7 +80,7 @@ let high_precision: f64 = 3.141592653589793; // 64-bit IEEE 754
 **Characteristics:**
 - IEEE 754 compliance
 - Standard floating-point operations
-- Default float type is `f64`
+- Default float literal lowers to `f64`
 - NaN and infinity support
 
 ### String Type
@@ -152,11 +152,18 @@ Tensor { var_type: Box<Type>, dimensions: Vec<usize> }
 ```
 ### User‑Defined/Composite Types
 
-- Class types carry parent linkage, field types with visibility, and method function types. Lowered to `%ClassName` with leading vtable pointer.
-- Struct types are available in the type system but not exercised in the current tests.
-- `UserDefined` and `Pointer<T>` are used internally in parsing/codegen.
-UserDefined(String)
-//       type_name
+- Class types carry parent linkage, field types with visibility, and method function types. Lowered to `%ClassName` with a leading vtable pointer (fields start at index 1).
+- Struct types are plain aggregates with fields in declaration order. Lowered to `%StructName` without a vtable (fields start at index 0).
+- `UserDefined(String, Box<Type>)` and `Pointer<T>` are used internally during parsing/codegen.
+
+Shapes for reference:
+
+```rust
+Class { name: String, parent: Option<Box<Type>>, fields: Vec<(Type, Visibility)>, methods: Vec<(Type, Visibility)> }
+Struct { name: String, parent: Option<Box<Type>>, fields: Vec<Type> }
+Tensor { var_type: Box<Type>, dimensions: Vec<usize> }
+UserDefined(String, Box<Type>)
+Pointer(Box<Type>)
 ```
 
 **Characteristics:**
@@ -174,23 +181,44 @@ impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let fmtstr = match self {
             Type::Bool => "bool".to_string(),
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
             Type::I64 => "i64".to_string(),
+            Type::U8 => "u8".to_string(),
+            Type::U16 => "u16".to_string(),
+            Type::U32 => "u32".to_string(),
+            Type::U64 => "u64".to_string(),
+            Type::F32 => "f32".to_string(),
+            Type::F64 => "f64".to_string(),
             Type::String => "string".to_string(),
-            Type::Function(params, ret) => format!(
-                "function ({}) -> {}",
-                params.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "),
-                ret.to_string()
-            ),
+            Type::Void => "none".to_string(),
+            Type::Function { name, args, ret_type, is_variadic } => {
+                let params_str = args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                let variadic_str = if *is_variadic { ", ..." } else { "" };
+                format!("function {}({}{}) -> {}", name, params_str, variadic_str, ret_type)
+            }
+            Type::Class { name, parent, fields, methods } => {
+                let parent_str = if let Some(p) = parent { format!(" extends {}", p) } else { String::new() };
+                let fields_str = fields.iter().map(|(t, v)| format!("{}: {}", v, t)).collect::<Vec<_>>().join(", ");
+                let methods_str = methods.iter().map(|(t, v)| format!("{}: {}", v, t)).collect::<Vec<_>>().join(", ");
+                format!("class {}{} {{ fields: [{}], methods: [{}] }}", name, parent_str, fields_str, methods_str)
+            }
+            Type::Struct { name, parent, fields } => {
+                let parent_str = if let Some(p) = parent { format!(" extends {}", p) } else { String::new() };
+                let fields_str = fields.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                format!("struct {}{} {{ fields: [{}] }}", name, parent_str, fields_str)
+            }
             Type::Tensor { var_type, dimensions } => format!("tensor[{:?};{:?}]", var_type, dimensions),
-            Type::UserDefined(name) => name.clone(),
-            // ... other types
+            Type::Pointer(inner) => format!("ptr<{}>", inner),
+            Type::UserDefined(name, typ) => format!("UserDefined {} <{}>", name, typ),
+            Type::ToBeEvaluated(s) => s.to_string(),
         };
         write!(f, "{}", fmtstr)
     }
 }
 ```
-## LLVM Type Mapping (as generated)
-### Type Parsing
+## Type Parsing
 
 ```rust
 impl FromStr for Type {
@@ -201,7 +229,7 @@ impl FromStr for Type {
             "bool" => Ok(Type::Bool),
             "i8" => Ok(Type::I8),
             "i16" => Ok(Type::I16),
-    }
+            "i32" => Ok(Type::I32),
             "i64" => Ok(Type::I64),
             "u8" => Ok(Type::U8),
             "u16" => Ok(Type::U16),
@@ -211,7 +239,16 @@ impl FromStr for Type {
             "f64" => Ok(Type::F64),
             "string" => Ok(Type::String),
             "none" => Ok(Type::Void),
-            _ => Err(()),
+            _ => {
+                if s.starts_with("ptr<") && s.ends_with('>') {
+                    // parse inner type
+                    let inner = &s[4..s.len()-1];
+                    let inner = Type::from_str(inner)?;
+                    Ok(Type::Pointer(Box::new(inner)))
+                } else {
+                    Err(())
+                }
+            }
         }
     }
 }

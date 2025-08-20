@@ -15,6 +15,7 @@ pub enum Token {
     Keyword(String),        // if, else, function, return, etc.
     Identifier(String),     // variable names, function names
     Number(i64),           // integer literals
+    NumberFloat(f64),      // float literals
     StringLiteral(String), // string literals in quotes
     Operator(String),      // +, -, *, /, ==, !=, etc.
     Punctuation(String),   // (, ), {, }, ;, :, etc.
@@ -24,8 +25,8 @@ pub enum Token {
 
 ### Constants (as implemented)
 
-- KEYWORDS: `["if","else","while","for","function","return","as","object","class","entity","component","system","static","dynamic","public","private","protected","init","destroy","tensor"]`
-- OPERATORS: `["+","-","*","/","%","=","==","!=","<",">","<=",">="]`
+- KEYWORDS: `["if","else","while","for","function","return","as","class","public","private","protected","init","destroy","tensor","true","false","struct"]`
+- OPERATORS: `["+","-","*","/","%","=","==","!=","<",">","<=",">=","!","&","|","&&","||"]`
 - PUNCTUATION: `["(",")","{","}","[","]",";",",",".",":","->"]`
 
 ### LexicalToken Structure
@@ -71,7 +72,7 @@ Converts a raw string into the appropriate token type.
 2. Numbers (parseable as `i64`)
 3. Operators (matches OPERATORS array)
 4. Punctuation (matches PUNCTUATION array)
-5. Keywords (matches KEYWORDS array: includes `class`, `init`, visibility markers, and `as` for casts)
+5. Keywords (matches KEYWORDS array: includes `class`, `struct`, `init`, visibility markers, `true`/`false`, and `as` for casts)
 6. Identifiers (everything else)
 
 ### `emit(token: &mut String, tokens: &mut Vec<LexicalToken>, line: usize, column: usize)`

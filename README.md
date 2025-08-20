@@ -6,16 +6,19 @@ A small, statically typed language compiler written in Rust that lowers to LLVM 
 
 MM‑Lang has a C/Rust‑inspired surface syntax. Core features work end‑to‑end (tokenize → parse → codegen → link → run).
 
-Test status: 27 passed, 0 failed (via `cargo test -q`).
+Test status: 38 passed, 0 failed (via `cargo test -q`).
 
 ### Fully working (tested)
 - Variable declarations with explicit types and assignments
 - Arithmetic and comparisons; unary `-` and logical negation `!`
+- Logical operators: `&&`, `||` (eager evaluation currently)
 - Implicit integer widening and explicit casts using `as`
 - Blocks and if/else control flow with proper scoping
 - String literals (lowered to private constant C strings)
 - C interop: `printf`, `scanf`, `malloc`, `free`
 - Functions: definitions, calls, return values
+- Booleans: `true` and `false` literals, boolean expressions
+- Floats: `f64` literals and mixed int/float arithmetic with proper lowering
 - Classes (single inheritance):
     - Fields with visibility markers (public/private/protected) [parsing and layout]
     - Constructors via `init(...) { ... }`
@@ -26,10 +29,16 @@ Test status: 27 passed, 0 failed (via `cargo test -q`).
     - Element indexing and assignment: `arr[1]`, `arr[0] = 42;`
     - Lowered to stack allocations with `getelementptr` for element access
 - Else‑if chains: `if ... else if ... else ...`
+- Structs:
+    - Declarations: `struct Name { field: Type, ... }` (optional trailing comma; optional trailing semicolon after block)
+    - Literals: `Name { field1: expr, field2: expr }`
+    - Field access and assignment: `p.x`, `p.y = 7`
+    - Plain layout (no vtable); fields indexed from 0 in LLVM IR
 
 ### Known limitations (current behavior)
 - Visibility keywords are parsed and preserved in types, but enforcement is not performed yet.
-- Numeric literals are integers; float literals aren’t tokenized yet (float types exist for future use). Boolean literals (`true`/`false`) are not tokenized yet, but boolean results are produced by comparisons.
+- Logical operators are eager (no short‑circuit yet).
+- Omitted fields in struct literals are left uninitialized; accessing them is undefined behavior for now.
 - Modules/imports, pattern matching, and generics are not implemented.
 - Error reporting is panic‑driven and aimed at development use.
 
@@ -42,6 +51,7 @@ Primitive/built‑in:
 Composite and compiler types used in codegen:
 - `function name(args...) -> ret` (first‑class function type)
 - `class Name [: Parent] { fields, methods }` (lowered to `%Name` with `%NameVTable`)
+- `struct Name [: Parent] { fields }` (lowered to `%Name` without vtable)
 - `tensor[T]` contiguous buffer (1‑D today)
 - `ptr<T>` pointers (used internally in codegen and interop)
 
@@ -77,7 +87,9 @@ Nested blocks are allowed. Each block introduces a new scope.
 ### Expressions & Operators ✅
 Arithmetic: `+ - * / %`
 
-Comparison: `== != < > <= >=` (lowered to integer comparisons).
+Comparison: `== != < > <= >=` (integers via `icmp`, floats via `fcmp`).
+
+Logical: `&&`, `||` produce booleans (currently both sides are evaluated).
 
 Unary: `-expr`, `!expr` (logical not; non‑bools are compared against zero).
 
@@ -179,6 +191,7 @@ statement        = variable_decl
                  | assignment
                  | function_def
                  | class_decl
+                 | struct_decl
                  | if_statement
                  | return_statement
                  | expression_stmt
@@ -196,6 +209,8 @@ param_list       = param { "," param } ;
 param            = identifier ":" type ;
 
 class_decl       = "class" identifier [ ":" identifier ] "{" { class_member } "}" ";" ;
+struct_decl      = "struct" identifier [ ":" identifier ] "{" { struct_field [ ("," | ";") ] } "}" [ ";" ] ;
+struct_field     = identifier ":" type ;
 class_member     = visibility field_decl
                  | visibility method_def  
                  | init_block ;
@@ -210,6 +225,7 @@ if_statement     = "if" expression block { "else" "if" expression block } [ "els
 expression       = initializer_list
                  | method_call
                  | call
+                 | struct_literal
                  | field_access
                  | array_access
                  | binary ;
@@ -217,17 +233,19 @@ expression       = initializer_list
 method_call      = primary "." identifier "(" [ arg_list ] ")" ;
 field_access     = primary "." identifier ;
 call             = primary "(" [ arg_list ] ")" ;
+struct_literal   = identifier "{" [ identifier ":" expression { "," identifier ":" expression } [ "," ] ] "}" ;
 array_access     = primary "[" expression "]" ;
 arg_list         = expression { "," expression } ;
 
-binary           = unary { bin_op unary } ;
-unary            = [ ("-" | "!") ] primary ;
-primary          = number
-                 | string_literal
-                 | identifier
-                 | cast
-                 | "(" expression ")"
-                 | initializer_list ;
+binary           = logical_or ;
+logical_or       = logical_and { "||" logical_and } ;
+logical_and      = comparison { "&&" comparison } ;
+comparison       = additive { ("==" | "!=" | "<" | ">" | "<=" | ">=") additive } ;
+additive         = term { ("+" | "-") term } ;
+term             = cast { ("*" | "/") cast } ;
+unary            = [ ("-" | "!") ] postfix ;
+postfix          = primary { ("[" expression "]") | ("." identifier [ "(" [ arg_list ] ")" ]) | ("(" [ arg_list ] ")") } ;
+primary          = number | float | string_literal | identifier | cast | "(" expression ")" | initializer_list | struct_literal ;
 cast             = primary "as" type ;
 initializer_list = "{" [ expression { "," expression } ] "}" ;
 
@@ -280,8 +298,8 @@ cargo run
 
 ## Current Limitations & Notes
 - Visibility is parsed but not enforced.
-- Float literals are not tokenized; only integer literals exist today.
-- Arrays, modules/imports, pattern matching, and generics are not implemented.
+- Logical operators are eager (no short‑circuit yet).
+- Arrays (tensors) are 1‑D only; no slices yet. Modules/imports, pattern matching, and generics are not implemented.
 - Error messages are primarily intended for development iteration.
 
 ## Testing
@@ -293,7 +311,7 @@ cargo test -q
 ```
 
 ### Test Results Overview
-- Passing: 27/27
+- Passing: 38/38
 
 ### Individual Tests
 - `test_variable_declaration` ✅
@@ -323,6 +341,17 @@ cargo test -q
 - `test_class` ✅
 - `test_method_call` ✅
 - `test_tensor` ✅
+ - `test_boolean` ✅
+ - `test_float_ops` ✅
+ - `test_int_to_float_1` ✅
+ - `test_float_to_int_1` ✅
+ - `test_float_to_int_2` ✅
+ - `test_float_to_double` ✅
+ - `test_simple_struct` ✅
+ - `test_struct_field_assignment` ✅
+ - `test_struct_trailing_comma_and_semicolon` ✅
+ - `test_struct_temp_literal_access` ✅
+ - `test_struct_partial_literal_unused_field` ✅
 
 ## Roadmap
 
@@ -338,10 +367,14 @@ cargo test -q
 - [x] Constructors (`init`) and object construction
 - [x] VTable generation and dynamic method dispatch
 - [x] Tensors with initializer lists and indexing (1‑D)
+ - [x] Struct declarations, literals, field access/assignment
+ - [x] Booleans and logical operators (||, &&)
+ - [x] Float literals and mixed arithmetic
 
 ### 🚧 In Progress
 - [ ] Visibility enforcement
-- [ ] Float literals, modules/imports
+- [ ] Short‑circuiting logical operators
+- [ ] Modules/imports
 - [ ] Improved diagnostics
 - [ ] Extended standard library bindings
 
@@ -379,7 +412,7 @@ Highlights:
 ### Language Features
 - [x] Casts with `as`, implicit integer widening
 - [x] Basic I/O (`printf`)
-- [ ] Float literals
+- [x] Float literals
 - [ ] Multi‑dimensional tensors and slices
 - [ ] Modules/imports
 - [ ] Pattern matching
@@ -389,8 +422,8 @@ Highlights:
 - [ ] Concurrency primitives
 
 ### Implementation Status
-- ✅ Complete: Basic expressions, variables, control flow, type ops, functions, and classes (incl. constructors, method calls, inheritance)
-- 🚧 Partial: Visibility enforcement, float literals, tensor ergonomics
+- ✅ Complete: Basic expressions, variables, control flow, type ops, functions, classes (incl. constructors, method calls, inheritance), structs, tensors, booleans/logical ops, float literals
+- 🚧 Partial: Visibility enforcement, short‑circuiting logical ops, tensor ergonomics
 - 📋 Planned: Items listed above
 
 ## Contact
