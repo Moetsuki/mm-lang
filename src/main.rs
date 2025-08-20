@@ -1,16 +1,16 @@
 #![allow(dead_code)]
 #![allow(unused_mut)]
 mod ast;
+mod backtrace;
 mod block;
 mod expression;
+mod file;
 mod llvm;
+mod span;
 mod statement;
 mod tokenizer;
 mod types;
 mod variable;
-mod backtrace;
-mod span;
-mod file;
 
 use ast::Ast;
 use statement::Statement;
@@ -73,7 +73,6 @@ fn process(
     let outfile = "build/output_".to_string() + &caller;
     let asmfile = "build/asm_".to_string() + &caller;
     let outfile_invoke = "./".to_string() + &outfile;
-
 
     // for token in &tokens {
     //     println!("{:?}", token);
@@ -174,10 +173,12 @@ fn process(
             }
             println!("Exit code: {}", &exit_code);
 
-
             if let Some(_expected_exit_code) = expected_exit_code {
                 // trunc exit_code to 8 bits
-                assert_eq!(exit_code as i8, _expected_exit_code as i8, "Program did not exit with expected code");
+                assert_eq!(
+                    exit_code as i8, _expected_exit_code as i8,
+                    "Program did not exit with expected code"
+                );
             }
             if let Some(expected_output) = expected {
                 assert_eq!(
@@ -378,7 +379,7 @@ fn test_precedence_1() {
 }
 
 #[test]
-fn test_precedence_2 () {
+fn test_precedence_2() {
     let source = r#"
     x: i64 = 5;
     y: i64 = 10;
@@ -710,7 +711,6 @@ fn test_float_to_int_1() {
     process(source, None, Some(15), false);
 }
 
-
 #[test]
 fn test_float_to_int_2() {
     let source = r#"
@@ -733,5 +733,70 @@ fn test_float_to_double() {
     return z;
     "#;
     process(source, None, Some(19), false);
+}
 
+#[test]
+fn test_simple_struct() {
+    let source = r#"
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    p: Point = Point { x: 5, y: 10 };
+
+    return p.x + p.y;
+    "#;
+    process(source, None, Some(15), false);
+}
+
+#[test]
+fn test_struct_field_assignment() {
+    let source = r#"
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    p: Point = Point { x: 1, y: 2 };
+    p.y = 7;
+
+    return p.x + p.y;
+    "#;
+    process(source, None, Some(8), false);
+}
+
+#[test]
+fn test_struct_trailing_comma_and_semicolon() {
+    let source = r#"
+    struct Vec2 {
+        x: i32,
+        y: i32,
+    };
+
+    v: Vec2 = Vec2 { x: 10, y: 5, };
+    return v.x - v.y;
+    "#;
+    process(source, None, Some(5), false);
+}
+
+#[test]
+fn test_struct_temp_literal_access() {
+    let source = r#"
+    struct Pair { a: i32, b: i32 }
+
+    return (Pair { a: 3, b: 4 }).a + (Pair { a: 1, b: 2 }).b;
+    "#;
+    process(source, None, Some(5), false);
+}
+
+#[test]
+fn test_struct_partial_literal_unused_field() {
+    let source = r#"
+    struct Data { x: i32, y: i32 }
+
+    d: Data = Data { x: 42 };
+    return d.x;
+    "#;
+    process(source, None, Some(42), false);
 }

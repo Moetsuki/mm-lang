@@ -64,6 +64,11 @@ pub enum Expression {
         index: Box<Expression>,
         span: Span,
     },
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, Expression)>,
+        span: Span,
+    },
 }
 
 impl Expression {
@@ -82,6 +87,7 @@ impl Expression {
             Expression::MethodCall { span, .. } => *span,
             Expression::FieldAccess { span, .. } => *span,
             Expression::ArrayAccess { span, .. } => *span,
+            Expression::StructLiteral { span, .. } => *span,
         }
     }
 
@@ -100,6 +106,7 @@ impl Expression {
             Expression::MethodCall { span, .. } => span,
             Expression::FieldAccess { span, .. } => span,
             Expression::ArrayAccess { span, .. } => span,
+            Expression::StructLiteral { span, .. } => span,
         }
     }
 }
@@ -159,6 +166,14 @@ impl Display for Expression {
             }
             Expression::ArrayAccess { array, index, .. } => {
                 format!("ArrayAccess({}, {})", array, index)
+            }
+            Expression::StructLiteral { name, fields, .. } => {
+                let parts = fields
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("StructLiteral({} {{ {} }})", name, parts)
             }
         };
         write!(f, "{}", fmtstr)

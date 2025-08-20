@@ -657,11 +657,25 @@ impl<'a> LLVM<'a> {
 
                     // If its TBE search for class or struct on scope
                     let final_type = match &var_info.var_type {
-                        Type::ToBeEvaluated(tbe_type) => self
-                            .class_definitions
-                            .get(tbe_type)
-                            .map(|c| self.get_class_type(&c.name))
-                            .unwrap_or(var_info.var_type.clone()),
+                        Type::ToBeEvaluated(tbe_type) => {
+                            if let Some(c) = self.class_definitions.get(tbe_type) {
+                                self.get_class_type(&c.name)
+                            } else if let Some(s) = self.struct_definitions.get(tbe_type) {
+                                // Build a Struct type signature from definition (no pointer)
+                                let field_types = s
+                                    .all_fields
+                                    .iter()
+                                    .map(|(v, _)| v.var_type.clone())
+                                    .collect();
+                                Type::Struct {
+                                    name: s.name.clone(),
+                                    parent: None,
+                                    fields: field_types,
+                                }
+                            } else {
+                                var_info.var_type.clone()
+                            }
+                        }
                         _ => var_info.var_type.clone(),
                     };
                     let mut final_variable = var_info.clone();
@@ -804,45 +818,42 @@ impl<'a> LLVM<'a> {
                         if let Type::Pointer(inner_type) = object_eval.register.clone().var_type {
                             eval.code.instructions.extend(object_eval.code.instructions);
 
-                            // Get the class or struct name from the inner type
-                            let object_name = if let Type::Class { name, .. } = *inner_type {
-                                name
-                            } else if let Type::Struct { name, .. } = *inner_type {
-                                name
-                            } else {
-                                panic!("Object must be a class or struct type for field access");
-                            };
-
-                            // Find the field in the class or struct definition
-                            let (field_index, field_var) =
-                                if let Some(class) = self.class_definitions.get(&object_name) {
-                                    class
+                            // Determine whether it's class or struct and resolve field index and var
+                            let (owner_name, field_index, field_var) = match *inner_type {
+                                Type::Class { ref name, .. } => {
+                                    let class = self.class_definitions.get(name).unwrap();
+                                    let (idx, (f, _)) = class
                                         .all_fields
                                         .iter()
                                         .enumerate()
                                         .find(|(_, (f, _))| f.0.name == *field)
-                                        .map(|(i, (f, _))| (i, f.0.clone()))
-                                } else if let Some(struct_def) =
-                                    self.struct_definitions.get(&object_name)
-                                {
-                                    struct_def
+                                        .unwrap_or_else(|| {
+                                            panic!(
+                                                "Field '{}' not found in class '{}'",
+                                                field, name
+                                            )
+                                        });
+                                    (name.clone(), idx + 1, f.0.clone())
+                                }
+                                Type::Struct { ref name, .. } => {
+                                    let struct_def = self.struct_definitions.get(name).unwrap();
+                                    let (idx, (f, _)) = struct_def
                                         .all_fields
                                         .iter()
                                         .enumerate()
                                         .find(|(_, (f, _))| f.name == *field)
-                                        .map(|(i, (f, _))| (i, f.clone()))
-                                } else {
-                                    panic!(
-                                        "Field '{}' not found in object type '{}'",
-                                        field, object_name
-                                    );
+                                        .unwrap_or_else(|| {
+                                            panic!(
+                                                "Field '{}' not found in struct '{}'",
+                                                field, name
+                                            )
+                                        });
+                                    (name.clone(), idx, f.clone())
                                 }
-                                .unwrap_or_else(|| {
-                                    panic!(
-                                        "Field '{}' not found in object type '{}'",
-                                        field, object_name
-                                    )
-                                });
+                                _ => {
+                                    panic!("Object must be a class or struct type for field access")
+                                }
+                            };
 
                             // Create a new register for the field
                             let field_register = Register::new(field_var.var_type.clone());
@@ -866,10 +877,7 @@ impl<'a> LLVM<'a> {
                             // Generate LLVM IR for the assignment
                             eval.code.push(format!(
                                 "%{} = getelementptr inbounds %{}, ptr %{}, i64 0, i32 {}",
-                                field_register,
-                                object_name,
-                                object_eval.register,
-                                field_index + 1 // +1 because the first element is the vtable pointer
+                                field_register, owner_name, object_eval.register, field_index
                             ));
 
                             eval.code.push(format!(
@@ -1730,11 +1738,44 @@ impl<'a> LLVM<'a> {
                     );
                     self.prologue.push("}".to_string());
                 }
-                _ => {
-                    panic!(
-                        "Unsupported statement type in LLVM IR transformation\n[Statement]:\n {:?}",
-                        statement
-                    );
+                Statement::Struct {
+                    name, fields, span, ..
+                } => {
+                    // Handle struct type definition similar to classes but without vtable/methods
+                    println!("### Statement::Struct");
+                    self.source.caret(*span);
+
+                    if self.struct_definitions.contains_key(name) {
+                        panic!("Struct '{}' already defined", name);
+                    }
+
+                    let mut struct_def = Struct::new(name.clone(), None, statement.clone());
+
+                    // Collect fields
+                    let all_fields: Vec<(Variable, String)> =
+                        fields.iter().map(|v| (v.clone(), name.clone())).collect();
+                    struct_def.all_fields = all_fields.clone();
+
+                    // Define LLVM struct type: %Name = type { <fields> }
+                    self.prologue.push(format!(
+                        "%{} = type {{\n{}\n}}",
+                        struct_def.name(),
+                        all_fields
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (f, _))| {
+                                let comma = if i + 1 < all_fields.len() { "," } else { "" };
+                                format!(
+                                    "  {:<55} ; {}",
+                                    format!("{}{}", self.type_to_llvm(&f.var_type), comma),
+                                    f.name
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+
+                    self.struct_definitions.insert(name.clone(), struct_def);
                 }
             }
         }
@@ -1767,7 +1808,8 @@ impl<'a> LLVM<'a> {
                 } else {
                     value.to_string()
                 };
-                eval.code.push(format!("%{} = fadd double 0.0, {}", eval.register, s));
+                eval.code
+                    .push(format!("%{} = fadd double 0.0, {}", eval.register, s));
                 eval.register.var_type = Type::F64;
             }
             Expression::Boolean { value, .. } => {
@@ -1989,7 +2031,11 @@ impl<'a> LLVM<'a> {
                             eval.code.push(format!(
                                 "%{} = icmp {}gt {} %{}, %{}",
                                 eval.register,
-                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                if self.type_is_signed(&eval.register.var_type) {
+                                    "s"
+                                } else {
+                                    "u"
+                                },
                                 result_llvm_type,
                                 left_converted,
                                 right_converted
@@ -2006,7 +2052,11 @@ impl<'a> LLVM<'a> {
                             eval.code.push(format!(
                                 "%{} = icmp {}lt {} %{}, %{}",
                                 eval.register,
-                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                if self.type_is_signed(&eval.register.var_type) {
+                                    "s"
+                                } else {
+                                    "u"
+                                },
                                 result_llvm_type,
                                 left_converted,
                                 right_converted
@@ -2023,7 +2073,11 @@ impl<'a> LLVM<'a> {
                             eval.code.push(format!(
                                 "%{} = icmp {}ge {} %{}, %{}",
                                 eval.register,
-                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                if self.type_is_signed(&eval.register.var_type) {
+                                    "s"
+                                } else {
+                                    "u"
+                                },
                                 result_llvm_type,
                                 left_converted,
                                 right_converted
@@ -2040,7 +2094,11 @@ impl<'a> LLVM<'a> {
                             eval.code.push(format!(
                                 "%{} = icmp {}le {} %{}, %{}",
                                 eval.register,
-                                if self.type_is_signed(&eval.register.var_type) { "s" } else { "u" },
+                                if self.type_is_signed(&eval.register.var_type) {
+                                    "s"
+                                } else {
+                                    "u"
+                                },
                                 result_llvm_type,
                                 left_converted,
                                 right_converted
@@ -2472,6 +2530,81 @@ impl<'a> LLVM<'a> {
                     arg_string_all
                 ));
             }
+            Expression::StructLiteral { name, fields, span } => {
+                println!(">>> Expression::StructLiteral");
+                self.source.caret(span);
+
+                // Lookup struct definition
+                let struct_def = self
+                    .struct_definitions
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("Struct '{}' not defined", name))
+                    .clone();
+
+                // Allocate struct on stack
+                let self_reg = Register::new_var(
+                    Type::Pointer(Box::new(Type::Struct {
+                        name: name.clone(),
+                        parent: None,
+                        fields: struct_def
+                            .all_fields
+                            .iter()
+                            .map(|(v, _)| v.var_type.clone())
+                            .collect(),
+                    })),
+                    name.clone().to_lowercase(),
+                );
+                eval.code
+                    .push(format!("%{} = alloca %{}, align 8", self_reg, name));
+
+                // Initialize fields by name
+                for (idx, (var, _)) in struct_def.all_fields.iter().enumerate() {
+                    if let Some((_, expr)) = fields.iter().find(|(fname, _)| fname == &var.name) {
+                        let rhs = self.transform_expression(expr.clone());
+                        eval.code.instructions.extend(rhs.code.instructions);
+
+                        // Coerce if needed
+                        let value_reg = if rhs.register.var_type != var.var_type {
+                            self.insert_type_conversion(
+                                &mut eval.code,
+                                &rhs.register,
+                                &var.var_type,
+                            )
+                        } else {
+                            rhs.register
+                        };
+
+                        let field_ptr = Register::new_var(
+                            Type::Pointer(Box::new(var.var_type.clone())),
+                            format!("{}_{}_ptr", name.to_lowercase(), var.name),
+                        );
+                        eval.code.push(format!(
+                            "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
+                            field_ptr, name, self_reg, idx
+                        ));
+                        eval.code.push(format!(
+                            "store {} %{}, ptr %{}",
+                            self.type_to_llvm(&var.var_type),
+                            value_reg,
+                            field_ptr
+                        ));
+                    } else {
+                        // If field not provided, leave uninitialized (could zero-init if desired)
+                    }
+                }
+
+                eval.register = self_reg;
+                // Expression value type is pointer to struct
+                eval.register.var_type = Type::Pointer(Box::new(Type::Struct {
+                    name: name.clone(),
+                    parent: None,
+                    fields: struct_def
+                        .all_fields
+                        .iter()
+                        .map(|(v, _)| v.var_type.clone())
+                        .collect(),
+                }));
+            }
             Expression::FieldAccess {
                 object,
                 field,
@@ -2514,50 +2647,70 @@ impl<'a> LLVM<'a> {
 
                 eval.code.instructions.extend(object_eval.code.instructions);
 
-                // Ensure the object is a pointer to a class
-                let (_class_type, class_name) = match &object_eval.register.var_type {
+                // Ensure the object is a pointer to a class or struct
+                let is_class;
+                let (class_name_opt, struct_name_opt) = match &object_eval.register.var_type {
                     Type::Pointer(inner_type) => match &**inner_type {
-                        Type::Class { name, .. } => (self.get_class_type(name), name.clone()),
-                        _ => panic!("Field access on non-class pointer"),
+                        Type::Class { name, .. } => {
+                            is_class = true;
+                            (Some(name.clone()), None)
+                        }
+                        Type::Struct { name, .. } => {
+                            is_class = false;
+                            (None, Some(name.clone()))
+                        }
+                        _ => panic!("Field access on unsupported pointer type"),
                     },
                     _ => panic!("Field access on non-pointer type"),
                 };
 
-                // Walk class hierarchy to find the field and remember which class owns it
-                let mut found: Option<(usize, Variable, Class)> = None;
-                let mut class_cursor = self.class_definitions.get(&class_name).cloned();
-                while let Some(class_def) = class_cursor.clone() {
-                    if let Statement::Class { fields, .. } = &class_def.statement
-                        && let Some((i, (var, _vis))) = fields
-                            .iter()
-                            .enumerate()
-                            .find(|(_, (f, _))| f.name == field)
-                    {
-                        found = Some((i, var.clone(), class_def.clone()));
-                        break;
+                // Resolve field index and type
+                let (field_index, field_var, owner_name) = if is_class {
+                    let class_name = class_name_opt.unwrap();
+                    let mut found: Option<(usize, Variable, Class)> = None;
+                    let mut class_cursor = self.class_definitions.get(&class_name).cloned();
+                    while let Some(class_def) = class_cursor.clone() {
+                        if let Statement::Class { fields, .. } = &class_def.statement
+                            && let Some((i, (var, _vis))) = fields
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (f, _))| f.name == field)
+                        {
+                            found = Some((i, var.clone(), class_def.clone()));
+                            break;
+                        }
+                        class_cursor = class_def.parent.as_ref().map(|p| (*p.clone()));
                     }
-                    // Move to parent
-                    class_cursor = class_def.parent.as_ref().map(|p| (*p.clone()));
-                }
-
-                let (field_index, field_var, field_class) = match found {
-                    Some(t) => t,
-                    None => panic!("Field '{}' not found in class hierarchy", field),
+                    let (idx, v, cls) = match found {
+                        Some(t) => t,
+                        None => panic!("Field '{}' not found in class hierarchy", field),
+                    };
+                    (idx + 1, v, cls.name)
+                } else {
+                    let struct_name = struct_name_opt.unwrap();
+                    let struct_def = self
+                        .struct_definitions
+                        .get(&struct_name)
+                        .unwrap_or_else(|| panic!("Struct '{}' not found", struct_name));
+                    let (idx, (v, _)) = struct_def
+                        .all_fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (v, _))| v.name == *field)
+                        .unwrap_or_else(|| {
+                            panic!("Field '{}' not found in struct '{}'", field, struct_name)
+                        });
+                    (idx, v.clone(), struct_name)
                 };
-                // field_class currently unused; keep for future logic
-                let _owning_class = field_class.clone();
 
                 // Generate GEP instruction to get the field pointer
                 let field_ptr_register = Register::new_var(
                     field_var.var_type.clone(),
-                    field_class.name.clone().to_lowercase(),
+                    owner_name.clone().to_lowercase(),
                 );
                 eval.code.push(format!(
                     "%{} = getelementptr inbounds %{}, ptr %{}, i32 0, i32 {}",
-                    field_ptr_register,
-                    field_class.name,
-                    object_eval.register,
-                    field_index + 1 // +1 because first element is the vtable pointer
+                    field_ptr_register, owner_name, object_eval.register, field_index
                 ));
 
                 // If the field is a pointer to another class, update the register for further access

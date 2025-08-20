@@ -9,6 +9,7 @@ use crate::tokenizer::OPERATORS;
 use crate::tokenizer::Token;
 use crate::types::Type;
 use crate::variable::Variable;
+use std::collections::HashSet;
 use std::str::FromStr;
 
 pub struct Ast<'a> {
@@ -16,6 +17,9 @@ pub struct Ast<'a> {
     pos: usize,
     tree: Option<Block>,
     source_file: &'a SourceFile,
+    // Track known type names to disambiguate constructs during parsing
+    class_names: HashSet<String>,
+    struct_names: HashSet<String>,
 }
 
 impl<'a> Ast<'a> {
@@ -25,6 +29,8 @@ impl<'a> Ast<'a> {
             pos: 0,
             tree: None,
             source_file,
+            class_names: HashSet::new(),
+            struct_names: HashSet::new(),
         }
     }
 
@@ -399,6 +405,9 @@ impl<'a> Ast<'a> {
                         panic!("Expected class name, but no more tokens available");
                     };
 
+                    // Record known class name early for downstream disambiguation
+                    self.class_names.insert(class_name.clone());
+
                     //
                     // Check if we have a parent class
                     //
@@ -571,6 +580,110 @@ impl<'a> Ast<'a> {
 
                     self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
                 }
+                Token::Keyword(keyword) if keyword == "struct" => {
+                    // Parse a simple struct definition: struct Name { field: type; ... };
+                    let struct_name = if let Some(tok) = self.next_token() {
+                        if let Token::Identifier(name) = &tok.token {
+                            name.clone()
+                        } else {
+                            panic!(
+                                "Expected struct name, found {:?} at line {}, column {}",
+                                tok.token, tok.line, tok.column
+                            );
+                        }
+                    } else {
+                        panic!("Expected struct name, but no more tokens available");
+                    };
+
+                    // Record known struct name early so expressions like `Point { ... }` can be recognized,
+                    // while avoiding mis-parsing identifiers before a block start (e.g., `if x < y {`).
+                    self.struct_names.insert(struct_name.clone());
+
+                    // Optional inheritance: struct Name : Parent { ... } not used yet but parsed
+                    let _parent_struct: Option<String> = if let Some(colon_token) =
+                        self.peek_token()
+                    {
+                        if colon_token.token == Token::Punctuation(":".to_string()) {
+                            self.next_token(); // consume ':'
+                            if let Some(parent_token) = self.next_token() {
+                                if let Token::Identifier(parent_name) = &parent_token.token {
+                                    Some(parent_name.clone())
+                                } else {
+                                    panic!(
+                                        "Expected parent struct name, found {:?} at line {}, column {}",
+                                        parent_token.token, parent_token.line, parent_token.column
+                                    );
+                                }
+                            } else {
+                                panic!("Expected parent struct name, but no more tokens available");
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    self.expect(&Token::Punctuation("{".to_string()));
+
+                    let mut fields: Vec<Variable> = Vec::new();
+                    loop {
+                        if let Some(tok) = self.peek_token() {
+                            match &tok.token {
+                                Token::Identifier(field_name) => {
+                                    let field_name = field_name.clone();
+                                    self.next_token();
+                                    self.expect(&Token::Punctuation(":".to_string()));
+                                    let field_type = self.parse_type();
+                                    fields.push(Variable {
+                                        name: field_name,
+                                        var_type: field_type,
+                                    });
+
+                                    // Accept ',' or ';' as separators and allow trailing comma before '}'
+                                    if matches!(self.peek_token().map(|t| &t.token), Some(Token::Punctuation(p)) if p == "," || p == ";")
+                                    {
+                                        self.next_token();
+                                    }
+                                    continue;
+                                }
+                                Token::Newline => {
+                                    self.next_token();
+                                    continue;
+                                }
+                                Token::Punctuation(p) if p == "}" => {
+                                    self.next_token();
+                                    break;
+                                }
+                                _ => panic!("Unexpected token in struct body: {:?}", tok.token),
+                            }
+                        } else {
+                            panic!("Unterminated struct body");
+                        }
+                    }
+
+                    let total_span = {
+                        if let Some(peek_tok) = self.peek_token() {
+                            peek_tok.span.join(lexical_token_span)
+                        } else {
+                            lexical_token_span
+                        }
+                    };
+
+                    statements.push(Statement::Struct {
+                        id: 0,
+                        name: struct_name,
+                        parent: None,
+                        fields,
+                        span: total_span,
+                    });
+
+                    // Optional trailing semicolon to be consistent with class style
+                    if matches!(self.peek_token().map(|t| &t.token), Some(Token::Punctuation(p)) if p == ";")
+                    {
+                        self.next_token();
+                    }
+                }
                 Token::Newline => {
                     //
                     // Ignore newlines
@@ -660,7 +773,10 @@ impl<'a> Ast<'a> {
         let mut args = Vec::new();
         while let Some(lexical_token) = self.peek_token() {
             match &lexical_token.token {
-                Token::Identifier(_) | Token::Number(_) | Token::NumberFloat(_) | Token::StringLiteral(_) => {
+                Token::Identifier(_)
+                | Token::Number(_)
+                | Token::NumberFloat(_)
+                | Token::StringLiteral(_) => {
                     args.push(self.parse_expr());
                     if let Some(next_token) = self.peek_token() {
                         if next_token.token == Token::Punctuation(",".to_string()) {
@@ -763,14 +879,73 @@ impl<'a> Ast<'a> {
                     }
                 }
                 Token::Identifier(name) => {
+                    // Could be variable or struct literal like Point { x: 1, y: 2 }
                     let name_clone = name.clone();
                     self.next_token();
-                    Expression::Variable {
-                        var: Variable {
+
+                    // If next token is '{' AND identifier is a known struct name, parse struct literal.
+                    // This avoids mis-parsing cases like `if x < y {` where `y {` begins a block.
+                    let mut is_struct_literal = false;
+                    let obr_span_opt = if let Some(tok) = self.peek_token() {
+                        if tok.token == Token::Punctuation("{".to_string())
+                            && self.struct_names.contains(&name_clone)
+                        {
+                            is_struct_literal = true;
+                            Some(tok.span)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if is_struct_literal {
+                        let _obr_span =
+                            obr_span_opt.expect("brace span must exist for struct literal");
+                        self.next_token(); // consume '{'
+                        let mut fields: Vec<(String, Expression)> = Vec::new();
+                        let end_span = loop {
+                            if let Some(t) = self.peek_token() {
+                                match &t.token {
+                                    Token::Punctuation(p) if p == "}" => {
+                                        let s = t.span;
+                                        self.next_token(); // consume '}'
+                                        break s;
+                                    }
+                                    Token::Identifier(field_name) => {
+                                        let field_name = field_name.clone();
+                                        self.next_token(); // consume identifier
+                                        self.expect(&Token::Punctuation(":".to_string()));
+                                        let value_expr = self.parse_expr();
+                                        fields.push((field_name, value_expr.clone()));
+                                        // optional comma
+                                        if matches!(self.peek_token().map(|t| &t.token), Some(Token::Punctuation(p)) if p == ",")
+                                        {
+                                            self.next_token();
+                                        }
+                                    }
+                                    Token::Newline => {
+                                        self.next_token();
+                                    }
+                                    _ => panic!("Unexpected token in struct literal"),
+                                }
+                            } else {
+                                panic!("Unterminated struct literal");
+                            }
+                        };
+                        Expression::StructLiteral {
                             name: name_clone,
-                            var_type: Type::ToBeEvaluated("invalid".to_string()),
-                        },
-                        span: lexical_token_span,
+                            fields,
+                            span: lexical_token_span.join(end_span),
+                        }
+                    } else {
+                        Expression::Variable {
+                            var: Variable {
+                                name: name_clone,
+                                var_type: Type::ToBeEvaluated("invalid".to_string()),
+                            },
+                            span: lexical_token_span,
+                        }
                     }
                 }
                 Token::Punctuation(p) if p == "(" => {
@@ -937,17 +1112,18 @@ impl<'a> Ast<'a> {
 
         while let Some(tok) = self.peek_token() {
             if let Token::Operator(op) = &tok.token
-                && op == "||" {
-                    self.next_token();
-                    let rhs = self.parse_logical_and();
-                    expr = Expression::BinaryOp {
-                        op: "||".to_string(),
-                        left: Box::new(expr.clone()),
-                        right: Box::new(rhs.clone()),
-                        span: expr.span().join(rhs.span()),
-                    };
-                    continue;
-                }
+                && op == "||"
+            {
+                self.next_token();
+                let rhs = self.parse_logical_and();
+                expr = Expression::BinaryOp {
+                    op: "||".to_string(),
+                    left: Box::new(expr.clone()),
+                    right: Box::new(rhs.clone()),
+                    span: expr.span().join(rhs.span()),
+                };
+                continue;
+            }
             break;
         }
 
@@ -960,17 +1136,18 @@ impl<'a> Ast<'a> {
 
         while let Some(tok) = self.peek_token() {
             if let Token::Operator(op) = &tok.token
-                && op == "&&" {
-                    self.next_token();
-                    let rhs = self.parse_comparison();
-                    expr = Expression::BinaryOp {
-                        op: "&&".to_string(),
-                        left: Box::new(expr.clone()),
-                        right: Box::new(rhs.clone()),
-                        span: expr.span().join(rhs.span()),
-                    };
-                    continue;
-                }
+                && op == "&&"
+            {
+                self.next_token();
+                let rhs = self.parse_comparison();
+                expr = Expression::BinaryOp {
+                    op: "&&".to_string(),
+                    left: Box::new(expr.clone()),
+                    right: Box::new(rhs.clone()),
+                    span: expr.span().join(rhs.span()),
+                };
+                continue;
+            }
             break;
         }
 
@@ -1091,15 +1268,16 @@ impl<'a> Ast<'a> {
         if let Some(lexical_token) = self.peek_token() {
             let lexical_token_span = lexical_token.span;
             if let Token::Operator(op) = &lexical_token.token
-                && op == "!" {
-                    self.next_token();
-                    let operand = self.parse_unary();
-                    return Expression::UnaryOp {
-                        op: "!".to_string(),
-                        expr: Box::new(operand.clone()),
-                        span: lexical_token_span.join(operand.span()),
-                    };
-                }
+                && op == "!"
+            {
+                self.next_token();
+                let operand = self.parse_unary();
+                return Expression::UnaryOp {
+                    op: "!".to_string(),
+                    expr: Box::new(operand.clone()),
+                    span: lexical_token_span.join(operand.span()),
+                };
+            }
         }
         // Fallback to postfix (which includes factors)
         self.parse_postfix()

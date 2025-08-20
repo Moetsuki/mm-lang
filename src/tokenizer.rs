@@ -9,7 +9,7 @@ pub const OPERATORS: [&str; 17] = [
     "!", "&", "|", "&&", "||",
 ];
 
-pub const KEYWORDS: [&str; 22] = [
+pub const KEYWORDS: [&str; 23] = [
     "if",
     "else",
     "while",
@@ -19,6 +19,7 @@ pub const KEYWORDS: [&str; 22] = [
     "as",
     "object",
     "class",
+    "struct",
     "entity",
     "component",
     "system",
