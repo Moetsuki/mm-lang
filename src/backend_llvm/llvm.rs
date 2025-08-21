@@ -10,6 +10,7 @@ use crate::statement::Visibility;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
+use crate::backend_llvm::type_llvm::type_to_llvm;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
@@ -440,26 +441,6 @@ impl<'a> LLVM<'a> {
         }
     }
 
-    fn type_to_llvm(&self, t: &Type) -> String {
-        match t {
-            Type::Bool => "i1".to_string(),
-            Type::I8 => "i8".to_string(),
-            Type::I16 => "i16".to_string(),
-            Type::I32 => "i32".to_string(),
-            Type::I64 => "i64".to_string(),
-            Type::U8 => "i8".to_string(),
-            Type::U16 => "i16".to_string(),
-            Type::U32 => "i32".to_string(),
-            Type::U64 => "i64".to_string(),
-            Type::F32 => "float".to_string(),
-            Type::F64 => "double".to_string(),
-            Type::String => "ptr".to_string(),
-            Type::Void => "void".to_string(),
-            Type::Pointer(_) => "ptr".to_string(),
-            _ => panic!("Unsupported type {} for LLVM IR", t),
-        }
-    }
-
     fn type_is_signed(&self, t: &Type) -> bool {
         match t {
             Type::I8 => true,
@@ -558,7 +539,7 @@ impl<'a> LLVM<'a> {
                         self.source.caret(*span);
 
                         // Allocate a contiguous buffer: alloca <elem>, i64 <len>
-                        let elem_llvm = self.type_to_llvm(elem_ty);
+                        let elem_llvm = type_to_llvm(elem_ty);
                         let len = elements.len() as i64;
                         let arr_reg = Register::new_var(
                             Type::Pointer(elem_ty.clone()),
@@ -723,7 +704,7 @@ impl<'a> LLVM<'a> {
                         eval.code.instructions.push(format!(
                             "%{} = add {} 0, %{}",
                             result_register,
-                            self.type_to_llvm(&lhs_eval.register.var_type),
+                            type_to_llvm(&lhs_eval.register.var_type),
                             coerced_register,
                         ));
 
@@ -779,7 +760,7 @@ impl<'a> LLVM<'a> {
                             Type::Pointer(inner) => inner.as_ref().clone(),
                             other => panic!("Array assignment on non-pointer type: {:?}", other),
                         };
-                        let elem_llvm = self.type_to_llvm(&elem_ty);
+                        let elem_llvm = type_to_llvm(&elem_ty);
 
                         // Coerce RHS to element type
                         let rhs_coerced = if rhs_eval.register.var_type != elem_ty {
@@ -882,7 +863,7 @@ impl<'a> LLVM<'a> {
 
                             eval.code.push(format!(
                                 "store {} %{}, ptr %{}",
-                                self.type_to_llvm(&coerced_register.var_type),
+                                type_to_llvm(&coerced_register.var_type),
                                 coerced_register,
                                 field_register
                             ));
@@ -1112,12 +1093,12 @@ impl<'a> LLVM<'a> {
                     self.source.caret(*span);
 
                     // Get LLVM types
-                    let return_type_llvm = self.type_to_llvm(&ret_type.clone());
+                    let return_type_llvm = type_to_llvm(&ret_type.clone());
 
                     // Generate function signature
                     let param_str = params
                         .iter()
-                        .map(|p| format!("{} %{}", self.type_to_llvm(&p.var_type), p.name))
+                        .map(|p| format!("{} %{}", type_to_llvm(&p.var_type), p.name))
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -1154,7 +1135,7 @@ impl<'a> LLVM<'a> {
                         self.code.push(format!(
                             "%{} = add {} 0, %{}",
                             param_register,
-                            self.type_to_llvm(&param.var_type),
+                            type_to_llvm(&param.var_type),
                             param.name
                         ));
                     }
@@ -1212,7 +1193,7 @@ impl<'a> LLVM<'a> {
                         // Return the coerced register
                         body_eval.code.push(format!(
                             "ret {} %{}",
-                            self.type_to_llvm(&coerced_register.var_type),
+                            type_to_llvm(&coerced_register.var_type),
                             coerced_register
                         ));
                     }
@@ -1271,7 +1252,7 @@ impl<'a> LLVM<'a> {
                                 .map(|(arg_eval, param_type)| {
                                     format!(
                                         "{} %{}",
-                                        self.type_to_llvm(param_type),
+                                        type_to_llvm(param_type),
                                         arg_eval.register.clone()
                                     )
                                 })
@@ -1486,7 +1467,7 @@ impl<'a> LLVM<'a> {
                                 let comma = if i + 1 < all_fields.len() { "," } else { "" };
                                 format!(
                                     "  {:<55} ; {}::{}",
-                                    format!("{}{}", self.type_to_llvm(&f.0.var_type), comma),
+                                    format!("{}{}", type_to_llvm(&f.0.var_type), comma),
                                     class_name,
                                     f.0.name.clone()
                                 )
@@ -1531,12 +1512,12 @@ impl<'a> LLVM<'a> {
                             ..
                         } = method.0.as_ref()
                         {
-                            let return_type = self.type_to_llvm(ret_type);
+                            let return_type = type_to_llvm(ret_type);
 
                             // First implicit param is always %ClassName*
                             let mut param_types: Vec<String> = vec!["ptr".to_string()];
                             for p in params {
-                                param_types.push(self.type_to_llvm(&p.var_type));
+                                param_types.push(type_to_llvm(&p.var_type));
                             }
 
                             let signature = format!("{}({})", return_type, param_types.join(", "));
@@ -1583,7 +1564,7 @@ impl<'a> LLVM<'a> {
                         } = method.0.as_ref()
                         {
                             // Generate function signature
-                            let return_type_llvm = self.type_to_llvm(ret_type);
+                            let return_type_llvm = type_to_llvm(ret_type);
 
                             // Create a register for `self` (the class instance)
                             let self_register = Register::new_var(
@@ -1655,7 +1636,7 @@ impl<'a> LLVM<'a> {
                                                 )
                                             })
                                             .0;
-                                        format!("{} %{}", self.type_to_llvm(&p.var_type), param_reg)
+                                        format!("{} %{}", type_to_llvm(&p.var_type), param_reg)
                                     })
                                     .collect::<Vec<_>>()
                                     .join(", ");
@@ -1767,7 +1748,7 @@ impl<'a> LLVM<'a> {
                                 let comma = if i + 1 < all_fields.len() { "," } else { "" };
                                 format!(
                                     "  {:<55} ; {}",
-                                    format!("{}{}", self.type_to_llvm(&f.var_type), comma),
+                                    format!("{}{}", type_to_llvm(&f.var_type), comma),
                                     f.name
                                 )
                             })
@@ -1841,7 +1822,7 @@ impl<'a> LLVM<'a> {
                     Type::Pointer(inner) => inner.as_ref().clone(),
                     other => panic!("Indexing non-pointer type: {:?}", other),
                 };
-                let elem_llvm = self.type_to_llvm(&elem_ty);
+                let elem_llvm = type_to_llvm(&elem_ty);
 
                 // Compute element pointer and load
                 let elem_ptr = Register::new_var(
@@ -1951,7 +1932,7 @@ impl<'a> LLVM<'a> {
                     right_eval.register
                 };
 
-                let result_llvm_type = self.type_to_llvm(&result_type);
+                let result_llvm_type = type_to_llvm(&result_type);
 
                 let is_float = matches!(result_type, Type::F32 | Type::F64);
                 match op.as_str() {
@@ -2207,7 +2188,7 @@ impl<'a> LLVM<'a> {
                 eval.code.instructions.extend(inner_eval.code.instructions);
 
                 let source_type = &inner_eval.register.llvm_type();
-                let target_llvm = self.type_to_llvm(&target_type);
+                let target_llvm = type_to_llvm(&target_type);
 
                 match (source_type.as_str(), target_llvm.as_str()) {
                     // Integer truncation (larger to smaller)
@@ -2442,7 +2423,7 @@ impl<'a> LLVM<'a> {
 
                         let param_sig_no_self = param_types
                             .iter()
-                            .map(|t| self.type_to_llvm(t))
+                            .map(type_to_llvm)
                             .collect::<Vec<_>>()
                             .join(", ");
 
@@ -2460,7 +2441,7 @@ impl<'a> LLVM<'a> {
                                 is_variadic: false,
                             },
                             param_types,
-                            format!("({}) -> {}", param_sig_all, self.type_to_llvm(ret_type)),
+                            format!("({}) -> {}", param_sig_all, type_to_llvm(ret_type)),
                         )
                     }
                     _ => panic!("Method statement {:?} isn't a function!", method_entry),
@@ -2511,7 +2492,7 @@ impl<'a> LLVM<'a> {
 
                 let arg_string_no_self = arg_registers
                     .iter()
-                    .map(|a| format!("{} %{}", self.type_to_llvm(&a.var_type), a))
+                    .map(|a| format!("{} %{}", type_to_llvm(&a.var_type), a))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -2525,7 +2506,7 @@ impl<'a> LLVM<'a> {
                 eval.code.push(format!(
                     "%{} = call {} %{}({})",
                     eval.register,
-                    self.type_to_llvm(method_ret),
+                    type_to_llvm(method_ret),
                     method_ptr_raw,
                     arg_string_all
                 ));
@@ -2584,7 +2565,7 @@ impl<'a> LLVM<'a> {
                         ));
                         eval.code.push(format!(
                             "store {} %{}, ptr %{}",
-                            self.type_to_llvm(&var.var_type),
+                            type_to_llvm(&var.var_type),
                             value_reg,
                             field_ptr
                         ));
@@ -2725,7 +2706,7 @@ impl<'a> LLVM<'a> {
                         eval.code.push(format!(
                             "%{} = load {}, ptr %{}",
                             field_value_register,
-                            self.type_to_llvm(&field_type),
+                            type_to_llvm(&field_type),
                             field_ptr_register
                         ));
                         eval.register = field_value_register;
@@ -2737,7 +2718,7 @@ impl<'a> LLVM<'a> {
                     eval.code.push(format!(
                         "%{} = load {}, ptr %{}",
                         field_value_register,
-                        self.type_to_llvm(&field_type),
+                        type_to_llvm(&field_type),
                         field_ptr_register
                     ));
                     eval.register = field_value_register;
@@ -2897,7 +2878,7 @@ impl<'a> LLVM<'a> {
                         // Call the function
                         let args_str = arg_registers
                             .iter()
-                            .map(|r| format!("{} %{}", self.type_to_llvm(&r.var_type), r))
+                            .map(|r| format!("{} %{}", type_to_llvm(&r.var_type), r))
                             .collect::<Vec<_>>()
                             .join(", ");
 
@@ -2913,7 +2894,7 @@ impl<'a> LLVM<'a> {
                             // }
                             eval.code.push(format!(
                                 "call {} @{}({})",
-                                self.type_to_llvm(&expected_ret_type),
+                                type_to_llvm(&expected_ret_type),
                                 func_name,
                                 args_str
                             ));
@@ -2922,7 +2903,7 @@ impl<'a> LLVM<'a> {
                             eval.code.push(format!(
                                 "%{} = call {} @{}({})",
                                 eval.register,
-                                self.type_to_llvm(&expected_ret_type),
+                                type_to_llvm(&expected_ret_type),
                                 func_name,
                                 args_str
                             ));
@@ -2956,12 +2937,12 @@ impl<'a> LLVM<'a> {
 
         // If we have a function, we need to get the return type as FROM
         let from_llvm = match &from_register.var_type {
-            Type::Function { ret_type, .. } => self.type_to_llvm(ret_type),
+            Type::Function { ret_type, .. } => type_to_llvm(ret_type),
             _ => from_register.llvm_type(),
         };
 
         // DEST type converting into
-        let to_llvm = self.type_to_llvm(target_type);
+        let to_llvm = type_to_llvm(target_type);
 
         match (from_llvm.as_str(), to_llvm.as_str()) {
             // Truncation from i64
@@ -3107,10 +3088,10 @@ impl<'a> LLVM<'a> {
             ..
         } = function
         {
-            let return_type = self.type_to_llvm(ret_type);
+            let return_type = type_to_llvm(ret_type);
             let params = args
                 .iter()
-                .map(|arg_type| self.type_to_llvm(arg_type).to_string())
+                .map(|arg_type| type_to_llvm(arg_type).to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             let variadic_str = if *is_variadic {

@@ -2,15 +2,14 @@
 #![allow(unused_mut)]
 mod ast;
 mod backend;
+mod backend_c;
+mod backend_llvm;
 mod backtrace;
 mod block;
 mod expression;
 mod file;
-mod llvm;
 mod span;
 mod statement;
-mod target_c;
-mod target_llvm;
 mod tokenizer;
 mod types;
 mod variable;
@@ -24,7 +23,28 @@ use std::thread;
 use tokenizer::tokenize;
 
 use crate::backend::{Backend, TargetKind};
+use crate::backend_c::target_c;
+use crate::backend_llvm::target_llvm;
 use crate::file::SourceFile;
+
+use std::panic::Location;
+use std::sync::atomic::{AtomicU64, Ordering};
+static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn sanitize_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_us = false;
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_us = false;
+        } else if !last_us {
+            out.push('_');
+            last_us = true;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
 
 fn get_caller_name() -> Option<String> {
     let bt = Backtrace::force_capture();
@@ -67,15 +87,62 @@ fn process(
     expected_exit_code: Option<i32>,
     print_asm: bool,
 ) {
+    // Build a stable label from the callsite (test function location)
+    let loc = Location::caller();
+    let caller_tag = sanitize_label(&format!(
+        "{}_{}_{}",
+        std::path::Path::new(loc.file())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown"),
+        loc.line(),
+        loc.column()
+    ));
+
+    process_impl(
+        source,
+        expected.clone(),
+        expected_exit_code,
+        print_asm,
+        TargetKind::LLVM,
+        &caller_tag,
+    );
+
+    process_impl(
+        source,
+        expected,
+        expected_exit_code,
+        print_asm,
+        TargetKind::C,
+        &caller_tag,
+    );
+}
+
+fn process_impl(
+    source: &str,
+    expected: Option<String>,
+    expected_exit_code: Option<i32>,
+    print_asm: bool,
+    kind: TargetKind,
+    caller_tag: &str,
+) {
     let source_file = SourceFile::new("source.mm", source.to_string());
 
     let mut tokens = tokenize(source, &source_file);
 
-    let caller = get_caller_name().unwrap_or_else(|| "unknown".to_string());
-    println!("Processing source code from: {}", caller);
+    println!(
+        "[Backend=`{}`] Processing source code from: {}",
+        kind, caller_tag
+    );
 
-    let outfile = "build/output_".to_string() + &caller;
-    let asmfile = "build/asm_".to_string() + &caller;
+    // Ensure output directory exists for both IR builds
+    std::fs::create_dir_all("build").expect("Failed to create build directory");
+
+    // Build unique, collision-free output names
+    let pid = std::process::id();
+    let seq = TEST_SEQ.fetch_add(1, Ordering::Relaxed);
+    let outfile = format!("build/output_{}_{}_p{}_s{}", kind, caller_tag, pid, seq);
+    let asmfile = format!("build/asm_{}_{}_p{}_s{}", kind, caller_tag, pid, seq);
     let outfile_invoke = "./".to_string() + &outfile;
 
     // for token in &tokens {
@@ -87,13 +154,6 @@ fn process(
     let _block = ast.parse();
 
     //print_block(&_block, 0);
-
-    // Select backend via env: MM_TARGET=llvm|c (default: llvm)
-    let target = std::env::var("MM_TARGET").unwrap_or_else(|_| "c".to_string());
-    let kind = match target.to_lowercase().as_str() {
-        "c" => TargetKind::C,
-        _ => TargetKind::LLVM,
-    };
 
     // Instantiate backend
     let ir_output = match kind {

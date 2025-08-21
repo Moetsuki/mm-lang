@@ -1,16 +1,17 @@
 use crate::ast::Ast;
 use crate::backend::Backend;
 use crate::file::SourceFile;
+use crate::backend_llvm::llvm;
 
 /// Thin wrapper that adapts the existing LLVM codegen to the Backend trait.
 pub struct TargetLLVM<'a> {
-    inner: crate::llvm::LLVM<'a>,
+    inner: llvm::LLVM<'a>,
 }
 
 impl<'a> TargetLLVM<'a> {
     pub fn new(ast: Ast<'a>, source: &'a SourceFile) -> Self {
         Self {
-            inner: crate::llvm::LLVM::new(ast, source),
+            inner: llvm::LLVM::new(ast, source),
         }
     }
 }

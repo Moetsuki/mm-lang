@@ -9,6 +9,7 @@ use crate::file::SourceFile;
 use crate::statement::Statement;
 use crate::types::Type;
 use crate::variable::Variable;
+use crate::backend_c::type_c::type_to_c;
 use std::collections::HashMap;
 
 pub struct TargetC<'a> {
@@ -57,33 +58,7 @@ impl<'a> TargetC<'a> {
         format!("{}_{}", prefix, self.temp_id)
     }
 
-    #[allow(clippy::only_used_in_recursion)]
-    fn type_to_c(&self, t: &Type) -> String {
-        match t {
-            Type::Bool => "bool".into(),
-            Type::I8 => "int8_t".into(),
-            Type::I16 => "int16_t".into(),
-            Type::I32 => "int32_t".into(),
-            Type::I64 => "int64_t".into(),
-            Type::U8 => "uint8_t".into(),
-            Type::U16 => "uint16_t".into(),
-            Type::U32 => "uint32_t".into(),
-            Type::U64 => "uint64_t".into(),
-            Type::F32 => "float".into(),
-            Type::F64 => "double".into(),
-            Type::String => "const char*".into(),
-            Type::Void => "void".into(),
-            Type::Pointer(inner) => format!("{}*", self.type_to_c(inner)),
-            Type::Function { ret_type, .. } => self.type_to_c(ret_type),
-            Type::ToBeEvaluated(name) => name.clone(),
-            Type::UserDefined(_, inner) => self.type_to_c(inner),
-            Type::Class { name, .. } => format!("struct {}", name),
-            Type::Struct { name, .. } => format!("struct {}", name),
-            Type::Tensor { var_type, .. } => self.type_to_c(var_type),
-        }
-    }
-
-    fn emit_stmt(&mut self, s: &Statement, _top_level: bool) -> Vec<String> {
+    fn transform_statement(&mut self, s: &Statement, _top_level: bool) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         match s {
             Statement::VariableDecl {
@@ -98,14 +73,14 @@ impl<'a> TargetC<'a> {
                         let mut prelude: Vec<String> = Vec::new();
                         let mut parts: Vec<String> = Vec::new();
                         for el in elements {
-                            let (c, e) = self.emit_expr(el);
+                            let (c, e) = self.transform_expression(el);
                             prelude.extend(c);
                             parts.push(e);
                         }
                         out.extend(prelude);
                         out.push(format!(
                             "{} {}[{}] = {{{}}};",
-                            self.type_to_c(elem_ty),
+                            type_to_c(elem_ty),
                             identifier.name,
                             elements.len(),
                             parts.join(", ")
@@ -122,7 +97,7 @@ impl<'a> TargetC<'a> {
                             let mut arg_exprs: Vec<String> = Vec::new();
                             let args_local = args.clone();
                             for a in args_local {
-                                let (c, e) = self.emit_expr(&a);
+                                let (c, e) = self.transform_expression(&a);
                                 out.extend(c);
                                 arg_exprs.push(e);
                             }
@@ -131,7 +106,7 @@ impl<'a> TargetC<'a> {
                             parts.extend(class.fields.iter().map(|_| "0".to_string()));
                             out.push(format!(
                                 "{} {} = (struct {}){{{}}};",
-                                self.type_to_c(&identifier.var_type),
+                                type_to_c(&identifier.var_type),
                                 identifier.name,
                                 class.name,
                                 parts.join(", ")
@@ -151,20 +126,20 @@ impl<'a> TargetC<'a> {
                         }
                     }
                     // fallthrough to normal path if not ctor
-                    let (rhs_code, rhs_expr) = self.emit_expr(value);
+                    let (rhs_code, rhs_expr) = self.transform_expression(value);
                     out.extend(rhs_code);
                     out.push(format!(
                         "{} {} = {};",
-                        self.type_to_c(&identifier.var_type),
+                        type_to_c(&identifier.var_type),
                         identifier.name,
                         rhs_expr
                     ));
                 } else {
-                    let (rhs_code, rhs_expr) = self.emit_expr(value);
+                    let (rhs_code, rhs_expr) = self.transform_expression(value);
                     out.extend(rhs_code);
                     out.push(format!(
                         "{} {} = {};",
-                        self.type_to_c(&identifier.var_type),
+                        type_to_c(&identifier.var_type),
                         identifier.name,
                         rhs_expr
                     ));
@@ -173,14 +148,14 @@ impl<'a> TargetC<'a> {
             Statement::Assignment {
                 identifier, value, ..
             } => {
-                let (rhs_code, rhs_expr) = self.emit_expr(value);
+                let (rhs_code, rhs_expr) = self.transform_expression(value);
                 out.extend(rhs_code);
                 match identifier {
                     Expression::Variable { var, .. } => {
                         out.push(format!("{} = {};", var.name, rhs_expr));
                     }
                     Expression::FieldAccess { object, field, .. } => {
-                        let (_oc, oexpr) = self.emit_expr(object);
+                        let (_oc, oexpr) = self.transform_expression(object);
                         let lhs = if let Expression::Variable { var, .. } = &**object
                             && var.name == "self"
                         {
@@ -203,11 +178,11 @@ impl<'a> TargetC<'a> {
                 else_block,
                 ..
             } => {
-                let (c_code, c_expr) = self.emit_expr(condition);
+                let (c_code, c_expr) = self.transform_expression(condition);
                 out.extend(c_code);
                 out.push(format!("if ({}) {{", c_expr));
                 for ss in &then_block.statements {
-                    out.extend(self.emit_stmt(ss, false));
+                    out.extend(self.transform_statement(ss, false));
                 }
                 out.push("}".into());
                 for e in elif {
@@ -217,11 +192,11 @@ impl<'a> TargetC<'a> {
                         ..
                     } = e
                     {
-                        let (ec_code, ec_expr) = self.emit_expr(condition);
+                        let (ec_code, ec_expr) = self.transform_expression(condition);
                         out.extend(ec_code);
                         out.push(format!("else if ({}) {{", ec_expr));
                         for ss in &then_block.statements {
-                            out.extend(self.emit_stmt(ss, false));
+                            out.extend(self.transform_statement(ss, false));
                         }
                         out.push("}".into());
                     } else {
@@ -231,13 +206,13 @@ impl<'a> TargetC<'a> {
                 if let Some(else_blk) = else_block {
                     out.push("else {".into());
                     for ss in &else_blk.statements {
-                        out.extend(self.emit_stmt(ss, false));
+                        out.extend(self.transform_statement(ss, false));
                     }
                     out.push("}".into());
                 }
             }
             Statement::Return { value, .. } => {
-                let (code, expr) = self.emit_expr(value);
+                let (code, expr) = self.transform_expression(value);
                 out.extend(code);
                 out.push(format!("return {};", expr));
             }
@@ -251,17 +226,17 @@ impl<'a> TargetC<'a> {
                 // Emit a full C function
                 let sig = format!(
                     "{} {}({})",
-                    self.type_to_c(ret_type),
+                    type_to_c(ret_type),
                     name,
                     params
                         .iter()
-                        .map(|p| format!("{} {}", self.type_to_c(&p.var_type), p.name))
+                        .map(|p| format!("{} {}", type_to_c(&p.var_type), p.name))
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
                 let mut body_lines = Vec::<String>::new();
                 for ss in &body.statements {
-                    body_lines.extend(self.emit_stmt(ss, false));
+                    body_lines.extend(self.transform_statement(ss, false));
                 }
                 let mut func = String::new();
                 func.push_str(&format!("{} {{\n", sig));
@@ -279,7 +254,7 @@ impl<'a> TargetC<'a> {
                     let arg_exprs = args
                         .iter()
                         .map(|a| {
-                            let (c, e) = self.emit_expr(a);
+                            let (c, e) = self.transform_expression(a);
                             out.extend(c);
                             e
                         })
@@ -340,7 +315,7 @@ impl<'a> TargetC<'a> {
                 for ms in &class_methods {
                     let params_sig = std::iter::once(format!(
                         "{}* self",
-                        self.type_to_c(&Type::Class {
+                        type_to_c(&Type::Class {
                             name: name.clone(),
                             parent: None,
                             fields: vec![],
@@ -350,13 +325,13 @@ impl<'a> TargetC<'a> {
                     .chain(
                         ms.params
                             .iter()
-                            .map(|p| format!("{} {}", self.type_to_c(&p.var_type), p.name)),
+                            .map(|p| format!("{} {}", type_to_c(&p.var_type), p.name)),
                     )
                     .collect::<Vec<_>>()
                     .join(", ");
                     self.decls.push_str(&format!(
                         "  {} (*{})({});\n",
-                        self.type_to_c(&ms.ret_type),
+                        type_to_c(&ms.ret_type),
                         ms.name,
                         params_sig
                     ));
@@ -371,7 +346,7 @@ impl<'a> TargetC<'a> {
                 for f in &class_fields {
                     self.decls.push_str(&format!(
                         "  {} {};\n",
-                        self.type_to_c(&f.var_type),
+                        type_to_c(&f.var_type),
                         f.name
                     ));
                 }
@@ -390,10 +365,10 @@ impl<'a> TargetC<'a> {
                         // Build a synthetic function signature including self
                         let mut sig = format!(
                             "{} __{}_{}({}* self",
-                            self.type_to_c(ret_type),
+                            type_to_c(ret_type),
                             name,
                             mname,
-                            self.type_to_c(&Type::Class {
+                            type_to_c(&Type::Class {
                                 name: name.clone(),
                                 parent: None,
                                 fields: vec![],
@@ -401,14 +376,14 @@ impl<'a> TargetC<'a> {
                             })
                         );
                         for p in params {
-                            sig.push_str(&format!(", {} {}", self.type_to_c(&p.var_type), p.name));
+                            sig.push_str(&format!(", {} {}", type_to_c(&p.var_type), p.name));
                         }
                         sig.push(')');
 
                         // Emit body
                         let mut body_lines = Vec::<String>::new();
                         for ss in &body.statements {
-                            body_lines.extend(self.emit_stmt(ss, false));
+                            body_lines.extend(self.transform_statement(ss, false));
                         }
                         let mut func = String::new();
                         func.push_str(&format!("{} {{\n", sig));
@@ -426,10 +401,10 @@ impl<'a> TargetC<'a> {
                 for ms in &class_methods {
                     let mut proto = format!(
                         "{} __{}_{}({}* self",
-                        self.type_to_c(&ms.ret_type),
+                        type_to_c(&ms.ret_type),
                         name,
                         ms.name,
-                        self.type_to_c(&Type::Class {
+                        type_to_c(&Type::Class {
                             name: name.clone(),
                             parent: None,
                             fields: vec![],
@@ -437,7 +412,7 @@ impl<'a> TargetC<'a> {
                         })
                     );
                     for p in &ms.params {
-                        proto.push_str(&format!(", {} {}", self.type_to_c(&p.var_type), p.name));
+                        proto.push_str(&format!(", {} {}", type_to_c(&p.var_type), p.name));
                     }
                     proto.push_str(");\n");
                     self.decls.push_str(&proto);
@@ -463,7 +438,7 @@ impl<'a> TargetC<'a> {
                 for f in fields {
                     self.decls.push_str(&format!(
                         "  {} {};\n",
-                        self.type_to_c(&f.var_type),
+                        type_to_c(&f.var_type),
                         f.name
                     ));
                 }
@@ -472,7 +447,7 @@ impl<'a> TargetC<'a> {
             Statement::Block { body, .. } => {
                 out.push("{".into());
                 for ss in &body.statements {
-                    out.extend(self.emit_stmt(ss, false));
+                    out.extend(self.transform_statement(ss, false));
                 }
                 out.push("}".into());
             }
@@ -481,7 +456,7 @@ impl<'a> TargetC<'a> {
     }
 
     // Emit expression into a C expression string, returning any prelude statements and the expr
-    fn emit_expr(&mut self, e: &Expression) -> (Vec<String>, String) {
+    fn transform_expression(&mut self, e: &Expression) -> (Vec<String>, String) {
         match e {
             Expression::Number { value, .. } => (vec![], format!("{}", value)),
             Expression::Float { value, .. } => {
@@ -509,21 +484,21 @@ impl<'a> TargetC<'a> {
             Expression::BinaryOp {
                 op, left, right, ..
             } => {
-                let (lc, le) = self.emit_expr(left);
-                let (rc, re) = self.emit_expr(right);
+                let (lc, le) = self.transform_expression(left);
+                let (rc, re) = self.transform_expression(right);
                 let mut code = lc;
                 code.extend(rc);
                 (code, format!("({} {} {})", le, op, re))
             }
             Expression::UnaryOp { op, expr, .. } => {
-                let (c, e1) = self.emit_expr(expr);
+                let (c, e1) = self.transform_expression(expr);
                 (c, format!("({}{})", op, e1))
             }
             Expression::Cast {
                 expr, target_type, ..
             } => {
-                let (c, e1) = self.emit_expr(expr);
-                (c, format!("(({})({}))", self.type_to_c(target_type), e1))
+                let (c, e1) = self.transform_expression(expr);
+                (c, format!("(({})({}))", type_to_c(target_type), e1))
             }
             Expression::Call { callee, args, .. } => {
                 if let Expression::Variable { var, .. } = callee.as_ref() {
@@ -534,7 +509,7 @@ impl<'a> TargetC<'a> {
                         let mut code = Vec::new();
                         let args_local = args.clone();
                         for a in args_local {
-                            let (c, _e) = self.emit_expr(&a);
+                            let (c, _e) = self.transform_expression(&a);
                             code.extend(c);
                         }
                         let class_name = class.name;
@@ -550,7 +525,7 @@ impl<'a> TargetC<'a> {
                     let exprs = args
                         .iter()
                         .map(|a| {
-                            let (c, e) = self.emit_expr(a);
+                            let (c, e) = self.transform_expression(a);
                             code.extend(c);
                             e
                         })
@@ -570,7 +545,7 @@ impl<'a> TargetC<'a> {
                 let parts = elements
                     .iter()
                     .map(|el| {
-                        let (c, e) = self.emit_expr(el);
+                        let (c, e) = self.transform_expression(el);
                         code.extend(c);
                         e
                     })
@@ -588,11 +563,11 @@ impl<'a> TargetC<'a> {
                 println!(">>> TargetC::Expression::MethodCall");
                 self._source.caret(*span);
 
-                let (mut code, obj_expr) = self.emit_expr(object);
+                let (mut code, obj_expr) = self.transform_expression(object);
                 let mut arg_exprs: Vec<String> = Vec::new();
                 let args_local = args.clone();
                 for a in args_local {
-                    let (c, ex) = self.emit_expr(&a);
+                    let (c, ex) = self.transform_expression(&a);
                     code.extend(c);
                     arg_exprs.push(ex);
                 }
@@ -616,7 +591,7 @@ impl<'a> TargetC<'a> {
                 )
             }
             Expression::FieldAccess { object, field, .. } => {
-                let (c, oexpr) = self.emit_expr(object);
+                let (c, oexpr) = self.transform_expression(object);
                 if let Expression::Variable { var, .. } = &**object
                     && var.name == "self"
                 {
@@ -630,7 +605,7 @@ impl<'a> TargetC<'a> {
                 let mut code = Vec::new();
                 let mut parts: Vec<String> = Vec::new();
                 for (fname, fexpr) in fields {
-                    let (c, ex) = self.emit_expr(fexpr);
+                    let (c, ex) = self.transform_expression(fexpr);
                     code.extend(c);
                     parts.push(format!(".{} = {}", fname, ex));
                 }
@@ -638,8 +613,8 @@ impl<'a> TargetC<'a> {
             }
             Expression::ArrayAccess { .. } => {
                 if let Expression::ArrayAccess { array, index, .. } = e {
-                    let (mut code, arr_expr) = self.emit_expr(array);
-                    let (ic, idx_expr) = self.emit_expr(index);
+                    let (mut code, arr_expr) = self.transform_expression(array);
+                    let (ic, idx_expr) = self.transform_expression(index);
                     code.extend(ic);
                     (code, format!("{}[{}]", arr_expr, idx_expr))
                 } else {
@@ -670,10 +645,10 @@ impl<'a> Backend<'a> for TargetC<'a> {
             match s {
                 Statement::Function { .. } => {
                     // emit into function store
-                    let _ = self.emit_stmt(s, true);
+                    let _ = self.transform_statement(s, true);
                 }
                 _ => {
-                    let lines = self.emit_stmt(s, true);
+                    let lines = self.transform_statement(s, true);
                     self.main_body.extend(lines);
                 }
             }
