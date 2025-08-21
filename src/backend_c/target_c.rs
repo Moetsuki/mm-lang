@@ -4,12 +4,12 @@
 
 use crate::ast::Ast;
 use crate::backend::Backend;
+use crate::backend_c::type_c::type_to_c;
 use crate::expression::Expression;
 use crate::file::SourceFile;
 use crate::statement::Statement;
 use crate::types::Type;
 use crate::variable::Variable;
-use crate::backend_c::type_c::type_to_c;
 use std::collections::HashMap;
 
 pub struct TargetC<'a> {
@@ -68,25 +68,26 @@ impl<'a> TargetC<'a> {
                 if let Type::Tensor {
                     var_type: elem_ty, ..
                 } = &identifier.var_type
-                    && let Expression::InitializerList { elements, .. } = value {
-                        // Emit element expressions in order (for side effects) and declare a fixed-size C array
-                        let mut prelude: Vec<String> = Vec::new();
-                        let mut parts: Vec<String> = Vec::new();
-                        for el in elements {
-                            let (c, e) = self.transform_expression(el);
-                            prelude.extend(c);
-                            parts.push(e);
-                        }
-                        out.extend(prelude);
-                        out.push(format!(
-                            "{} {}[{}] = {{{}}};",
-                            type_to_c(elem_ty),
-                            identifier.name,
-                            elements.len(),
-                            parts.join(", ")
-                        ));
-                        return out;
+                    && let Expression::InitializerList { elements, .. } = value
+                {
+                    // Emit element expressions in order (for side effects) and declare a fixed-size C array
+                    let mut prelude: Vec<String> = Vec::new();
+                    let mut parts: Vec<String> = Vec::new();
+                    for el in elements {
+                        let (c, e) = self.transform_expression(el);
+                        prelude.extend(c);
+                        parts.push(e);
                     }
+                    out.extend(prelude);
+                    out.push(format!(
+                        "{} {}[{}] = {{{}}};",
+                        type_to_c(elem_ty),
+                        identifier.name,
+                        elements.len(),
+                        parts.join(", ")
+                    ));
+                    return out;
+                }
                 // Detect class constructor call: T x = T(args...);
                 if let Expression::Call { callee, args, .. } = value {
                     if let Expression::Variable { var, .. } = callee.as_ref() {
@@ -344,11 +345,8 @@ impl<'a> TargetC<'a> {
                     name, name
                 ));
                 for f in &class_fields {
-                    self.decls.push_str(&format!(
-                        "  {} {};\n",
-                        type_to_c(&f.var_type),
-                        f.name
-                    ));
+                    self.decls
+                        .push_str(&format!("  {} {};\n", type_to_c(&f.var_type), f.name));
                 }
                 self.decls.push_str("};\n\n");
 
@@ -436,11 +434,8 @@ impl<'a> TargetC<'a> {
                     .push_str(&format!("typedef struct {} {};\n", name, name));
                 self.decls.push_str(&format!("struct {} {{\n", name));
                 for f in fields {
-                    self.decls.push_str(&format!(
-                        "  {} {};\n",
-                        type_to_c(&f.var_type),
-                        f.name
-                    ));
+                    self.decls
+                        .push_str(&format!("  {} {};\n", type_to_c(&f.var_type), f.name));
                 }
                 self.decls.push_str("};\n\n");
             }
@@ -484,11 +479,33 @@ impl<'a> TargetC<'a> {
             Expression::BinaryOp {
                 op, left, right, ..
             } => {
-                let (lc, le) = self.transform_expression(left);
-                let (rc, re) = self.transform_expression(right);
-                let mut code = lc;
-                code.extend(rc);
-                (code, format!("({} {} {})", le, op, re))
+                if op == "&&" || op == "||" {
+                    // Emit short-circuiting with a temporary boolean
+                    let (lc, le) = self.transform_expression(left);
+                    let (rc, re) = self.transform_expression(right);
+                    let mut code = lc;
+                    let tmp = self.fresh("tmpb");
+                    code.push(format!("bool {} = ({});", tmp, le));
+                    if op == "&&" {
+                        code.push(format!("if ({}) {{", tmp));
+                        code.extend(rc);
+                        code.push(format!("  {} = ({} && ({}));", tmp, tmp, re));
+                        code.push("}".into());
+                    } else {
+                        // ||
+                        code.push(format!("if (!{}) {{", tmp));
+                        code.extend(rc);
+                        code.push(format!("  {} = ({} || ({}));", tmp, tmp, re));
+                        code.push("}".into());
+                    }
+                    (code, tmp)
+                } else {
+                    let (lc, le) = self.transform_expression(left);
+                    let (rc, re) = self.transform_expression(right);
+                    let mut code = lc;
+                    code.extend(rc);
+                    (code, format!("({} {} {})", le, op, re))
+                }
             }
             Expression::UnaryOp { op, expr, .. } => {
                 let (c, e1) = self.transform_expression(expr);

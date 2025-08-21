@@ -2,6 +2,7 @@
 
 use core::panic;
 
+use crate::backend_llvm::type_llvm::type_to_llvm;
 use crate::backtrace;
 use crate::block::Block;
 use crate::file::{FileId, SourceFile};
@@ -10,7 +11,6 @@ use crate::statement::Visibility;
 use crate::types::Type;
 use crate::variable::Variable;
 use crate::{ast::Ast, expression::Expression, statement::Statement};
-use crate::backend_llvm::type_llvm::type_to_llvm;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
@@ -1876,39 +1876,99 @@ impl<'a> LLVM<'a> {
                 right,
                 span,
             } => {
-                let left_eval = self.transform_expression(*left.clone());
-                let right_eval = self.transform_expression(*right.clone());
-
                 println!(">>> Expression::BinaryOp");
                 self.source.caret(span);
 
-                eval.code.instructions.extend(left_eval.code.instructions);
-                eval.code.instructions.extend(right_eval.code.instructions);
-
-                // Logical ops handled separately (produce boolean i1)
+                // Short-circuit logical operators
                 if op == "&&" || op == "||" {
-                    // Coerce both operands to bool (i1)
-                    let to_bool = |code: &mut IR, r: &Register| -> Register {
-                        if r.var_type == Type::Bool {
-                            r.clone()
-                        } else {
-                            let tmp = Register::new(Type::Bool);
-                            code.push(format!("%{} = icmp ne {} %{}, 0", tmp, r.llvm_type(), r));
-                            tmp
-                        }
+                    // Evaluate LHS first
+                    let left_eval = self.transform_expression(*left.clone());
+                    eval.code.instructions.extend(left_eval.code.instructions);
+
+                    // Coerce LHS to i1
+                    let lbool = if left_eval.register.var_type == Type::Bool {
+                        left_eval.register
+                    } else {
+                        let tmp = Register::new(Type::Bool);
+                        eval.code.push(format!(
+                            "%{} = icmp ne {} %{}, 0",
+                            tmp,
+                            left_eval.register.llvm_type(),
+                            left_eval.register
+                        ));
+                        tmp
                     };
 
-                    let lbool = to_bool(&mut eval.code, &left_eval.register);
-                    let rbool = to_bool(&mut eval.code, &right_eval.register);
+                    // Create labels
+                    let rhs_label = format!("sc_rhs_{}", eval.register.id);
+                    let end_label = format!("sc_end_{}", eval.register.id);
+                    let lhs_alt_label = if op == "&&" {
+                        format!("sc_lhs_false_{}", eval.register.id)
+                    } else {
+                        format!("sc_lhs_true_{}", eval.register.id)
+                    };
 
-                    let llvm_op = if op == "&&" { "and" } else { "or" };
-                    eval.code.push(format!(
-                        "%{} = {} i1 %{}, %{}",
-                        eval.register, llvm_op, lbool, rbool
-                    ));
+                    // Branch depending on op: for && go to rhs if true; for || go to rhs if false
+                    if op == "&&" {
+                        eval.code.push(format!(
+                            "br i1 %{}, label %{}, label %{}",
+                            lbool, rhs_label, lhs_alt_label
+                        ));
+                    } else {
+                        // ||
+                        eval.code.push(format!(
+                            "br i1 %{}, label %{}, label %{}",
+                            lbool, lhs_alt_label, rhs_label
+                        ));
+                    }
+
+                    // RHS block
+                    eval.code.push(format!("{}:", rhs_label));
+                    let right_eval = self.transform_expression(*right.clone());
+                    eval.code.instructions.extend(right_eval.code.instructions);
+                    let rbool = if right_eval.register.var_type == Type::Bool {
+                        right_eval.register
+                    } else {
+                        let tmp = Register::new(Type::Bool);
+                        eval.code.push(format!(
+                            "%{} = icmp ne {} %{}, 0",
+                            tmp,
+                            right_eval.register.llvm_type(),
+                            right_eval.register
+                        ));
+                        tmp
+                    };
+                    eval.code.push(format!("br label %{}", end_label));
+
+                    // LHS alternative (short-circuit) block
+                    eval.code.push(format!("{}:", lhs_alt_label));
+                    eval.code.push(format!("br label %{}", end_label));
+
+                    // End + phi
+                    eval.code.push(format!("{}:", end_label));
+                    if op == "&&" {
+                        // false from lhs_alt, rbool from rhs
+                        eval.code.push(format!(
+                            "%{} = phi i1 [ false, %{} ], [ %{}, %{} ]",
+                            eval.register, lhs_alt_label, rbool, rhs_label
+                        ));
+                    } else {
+                        // true from lhs_alt, rbool from rhs
+                        eval.code.push(format!(
+                            "%{} = phi i1 [ true, %{} ], [ %{}, %{} ]",
+                            eval.register, lhs_alt_label, rbool, rhs_label
+                        ));
+                    }
                     eval.register.var_type = Type::Bool;
                     return eval;
                 }
+
+                // Non-logical: evaluate both sides eagerly
+                let left_eval = self.transform_expression(*left.clone());
+                let right_eval = self.transform_expression(*right.clone());
+
+                eval.code.instructions.extend(left_eval.code.instructions);
+                eval.code.instructions.extend(right_eval.code.instructions);
 
                 // Determine the result type (promote to larger type) for arithmetic/comparison
                 let result_type = self.determine_binary_op_result_type(
@@ -3259,7 +3319,7 @@ impl<'a> LLVM<'a> {
             Type::I32, // ret_type
         )));
     }
-    
+
     /// Returns true if, starting from the beginning of this statement list,
     /// control-flow is guaranteed to hit a return before falling through the end.
     fn all_paths_return(&self, statements: &[Statement]) -> bool {

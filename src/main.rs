@@ -806,6 +806,68 @@ fn test_boolean() {
 }
 
 #[test]
+fn test_short_circuit_and_skips_rhs() {
+    let source = r#"
+    a: bool = false;
+    b: bool = true;
+    // RHS would print if evaluated
+    str: string = "RHS";
+    if a && printf(str) {
+        return 1;
+    } else {
+        return 2;
+    }
+    "#;
+    // Expect 2 and no output (no RHS call)
+    process(source, Some("").map(|s| s.to_string()), Some(2), false);
+}
+
+#[test]
+fn test_short_circuit_or_skips_rhs() {
+    let source = r#"
+    a: bool = true;
+    str: string = "RHS";
+    if a || printf(str) {
+        return 3;
+    } else {
+        return 4;
+    }
+    "#;
+    // Expect 3 and no output (no RHS call)
+    process(source, Some("").map(|s| s.to_string()), Some(3), false);
+}
+
+#[test]
+fn test_short_circuit_and_evaluates_rhs() {
+    let source = r#"
+    a: bool = true;
+    str: string = "X";
+    // Should evaluate RHS and print X
+    if a && printf(str) {
+        return 5;
+    } else {
+        return 6;
+    }
+    "#;
+    process(source, Some("X".to_string()), Some(5), false);
+}
+
+#[test]
+fn test_short_circuit_or_evaluates_rhs() {
+    let source = r#"
+    a: bool = false;
+    str: string = "Y";
+    // Should evaluate RHS and print Y
+    if a || printf(str) {
+        return 7;
+    } else {
+        return 8;
+    }
+    "#;
+    process(source, Some("Y".to_string()), Some(7), false);
+}
+
+#[test]
 fn test_float_ops() {
     let source = r#"
     v: f32 = 3.14;

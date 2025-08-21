@@ -1,0 +1,18 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "cargo test mm-lang",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"--quiet"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		}
+	]
+}
