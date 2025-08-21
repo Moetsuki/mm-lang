@@ -1,12 +1,21 @@
 # MM‑Lang Programming Language
 
-A small, statically typed language compiler written in Rust that lowers to LLVM IR with executable output via Clang.
+A small, statically typed language compiler written in Rust that lowers to LLVM IR or C and builds executables via Clang.
 
 ## Overview
 
-MM‑Lang has a C/Rust‑inspired surface syntax. Core features work end‑to‑end (tokenize → parse → codegen → link → run).
+MM‑Lang has a C/Rust‑inspired surface syntax. Core features work end‑to‑end (tokenize → parse → codegen → compile → run).
 
-Test status: 38 passed, 0 failed (via `cargo test -q`).
+Test status: 38 passed, 0 failed (via `cargo test -q`). Tests exercise both LLVM and C backends for each case.
+
+## Backends
+
+Two code generation backends are available and validated by the test suite:
+
+- LLVM IR backend: emits LLVM IR, then compiles it with Clang.
+- C backend: emits portable C, then compiles it with Clang.
+
+You’ll see per‑test logs prefixed with the target, e.g. `[Backend=llvm]` and `[Backend=c]`.
 
 ### Fully working (tested)
 - Variable declarations with explicit types and assignments
@@ -105,7 +114,7 @@ m: i32 = n as i32;     // explicit narrowing cast
 Implicit coercion only widens (never loses precision). Explicit `as` is required to narrow.
 
 ### Strings & C Interop ✅
-String literals are lowered to private constant null‑terminated byte arrays. Example using `printf`:
+String literals are lowered to private constant null‑terminated byte arrays (LLVM) or `const char*` (C). Example using `printf`:
 ```mm
 msg: string = "Hello, World!";
 printf(msg);
@@ -265,6 +274,14 @@ All listed grammar constructs are parsed and code‑generated as described above
 mm-lang/
 ├── src/
 │   ├── main.rs          # Entry point & sample tests
+│   ├── backend.rs       # Backend trait & TargetKind
+│   ├── backend_c/       # C backend
+│   │   ├── mod.rs
+│   │   ├── target_c.rs  # C code generation
+│   │   └── type_c.rs    # Type mapping to C
+│   ├── backend_llvm/    # LLVM backend
+│   │   ├── llvm.rs      # LLVM IR generation
+│   │   └── type_llvm.rs # Type mapping to LLVM
 │   ├── tokenizer.rs     # Lexical analysis
 │   ├── ast.rs           # AST construction
 │   ├── expression.rs    # Expressions
@@ -272,7 +289,6 @@ mm-lang/
 │   ├── block.rs         # Block container
 │   ├── variable.rs      # Variable representation
 │   ├── types.rs         # Type enum / helpers
-│   ├── llvm.rs          # LLVM IR generation backend
 │   ├── backtrace.rs     # Helper for caller tracing in logs
 │   ├── span.rs          # Source span tracking
 │   └── file.rs          # Source file abstraction
@@ -282,7 +298,7 @@ mm-lang/
 ```
 
 ## Prerequisites
-- Clang must be available on PATH (used to compile LLVM IR to native executable).
+- Clang must be available on PATH (used to compile LLVM IR or C to native executables).
 
 ## Building
 ```bash
@@ -395,7 +411,7 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 
 ## Architecture
 
-Pipeline: Tokenize → Parse → Transform (LLVM IR) → Link via Clang → Run
+Pipeline: Tokenize → Parse → Transform (LLVM IR | C) → Compile via Clang → Run
 
 Highlights:
 - Tokenizer recognizes keywords (`class`, `public`/`private`/`protected`, `init`, `as`, …), operators, and punctuation (including `->`).

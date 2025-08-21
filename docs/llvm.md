@@ -4,7 +4,9 @@
 
 ## Overview
 
-The LLVM module (`llvm.rs`) handles the final stage of compilation, transforming the Abstract Syntax Tree into LLVM Intermediate Representation (IR) code. This module manages scope, registers, memory allocation, and code generation for efficient execution.
+The LLVM backend (`src/backend_llvm/llvm.rs`) handles the final stage of compilation, transforming the Abstract Syntax Tree into LLVM Intermediate Representation (IR) code. This module manages scope, registers, memory allocation, and code generation for efficient execution.
+
+Note: Type mapping logic previously inline has been refactored into `src/backend_llvm/type_llvm.rs` and is imported where needed.
 
 ## Core Architecture
 
