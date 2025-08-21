@@ -1,6 +1,6 @@
 # MM‑Lang Programming Language
 
-A small, statically typed language compiler written in Rust that lowers to LLVM IR or C and builds executables via Clang.
+A small, statically typed language **compiler** written in Rust that lowers to LLVM IR or C and builds executables via Clang.
 
 ## Overview
 
@@ -12,8 +12,8 @@ Test status: 38 passed, 0 failed (via `cargo test -q`). Tests exercise both LLVM
 
 Two code generation backends are available and validated by the test suite:
 
-- LLVM IR backend: emits LLVM IR, then compiles it with Clang.
-- C backend: emits portable C, then compiles it with Clang.
+- LLVM IR backend
+- C backend
 
 You’ll see per‑test logs prefixed with the target, e.g. `[Backend=llvm]` and `[Backend=c]`.
 
@@ -411,7 +411,7 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 
 ## Architecture
 
-Pipeline: Tokenize → Parse → Transform (LLVM IR | C) → Compile via Clang → Run
+Pipeline: Tokenize → Parse → Transform (LLVM IR | C) → Generate executable via Clang → Run
 
 Highlights:
 - Tokenizer recognizes keywords (`class`, `public`/`private`/`protected`, `init`, `as`, …), operators, and punctuation (including `->`).
