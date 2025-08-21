@@ -57,7 +57,6 @@ You’ll see per‑test logs prefixed with the target, e.g. `[Backend=llvm]` and
 
 ### Known limitations (current behavior)
 - Visibility keywords are parsed and preserved in types, but enforcement is not performed yet.
-- Logical operators are eager (no short‑circuit yet).
 - Omitted fields in struct literals are left uninitialized; accessing them is undefined behavior for now.
 - Modules/imports, pattern matching, and generics are not implemented.
 - Error reporting is panic‑driven and aimed at development use.
@@ -325,7 +324,6 @@ cargo run
 
 ## Current Limitations & Notes
 - Visibility is parsed but not enforced.
-- Logical operators are eager (no short‑circuit yet).
 - Arrays (tensors) are 1‑D only; no slices yet. Modules/imports, pattern matching, and generics are not implemented.
 - Error messages are primarily intended for development iteration.
 
@@ -338,7 +336,7 @@ cargo test -q
 ```
 
 ### Test Results Overview
-- Passing: 38/38
+- Passing: 42/42
 
 ### Individual Tests
 - `test_variable_declaration` ✅
@@ -379,6 +377,10 @@ cargo test -q
  - `test_struct_trailing_comma_and_semicolon` ✅
  - `test_struct_temp_literal_access` ✅
  - `test_struct_partial_literal_unused_field` ✅
+ - `test_short_circuit_and_skips_rhs` ✅
+ - `test_short_circuit_or_skips_rhs` ✅
+ - `test_short_circuit_and_evaluates_rhs` ✅
+ - `test_short_circuit_or_evaluates_rhs` ✅
 
 ## Roadmap
 
@@ -394,13 +396,13 @@ cargo test -q
 - [x] Constructors (`init`) and object construction
 - [x] VTable generation and dynamic method dispatch
 - [x] Tensors with initializer lists and indexing (1‑D)
- - [x] Struct declarations, literals, field access/assignment
- - [x] Booleans and logical operators (||, &&)
- - [x] Float literals and mixed arithmetic
+- [x] Struct declarations, literals, field access/assignment
+- [x] Booleans and logical operators (||, &&)
+- [x] Float literals and mixed arithmetic
+- [x] Short‑circuiting logical operators
 
 ### 🚧 In Progress
 - [ ] Visibility enforcement
-- [ ] Short‑circuiting logical operators
 - [ ] Modules/imports
 - [ ] Improved diagnostics
 - [ ] Extended standard library bindings
@@ -450,7 +452,7 @@ Highlights:
 
 ### Implementation Status
 - ✅ Complete: Basic expressions, variables, control flow, type ops, functions, classes (incl. constructors, method calls, inheritance), structs, tensors, booleans/logical ops, float literals
-- 🚧 Partial: Visibility enforcement, short‑circuiting logical ops, tensor ergonomics
+- 🚧 Partial: Visibility enforcement, tensor ergonomics
 - 📋 Planned: Items listed above
 
 ## Contact

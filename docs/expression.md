@@ -214,4 +214,4 @@ Type mismatches and unsupported operations panic with helpful context during dev
 
 ## Future Enhancements
 
-- Ternary operator, lambda/closures, short-circuit logical ops.
+- Ternary operator, lambda/closures.
