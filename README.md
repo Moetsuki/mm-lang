@@ -2,11 +2,22 @@
 
 A small, statically typed language **compiler** written in Rust that lowers to LLVM IR or C and builds executables via Clang.
 
-## Overview
+## Documentation
 
-MM‑Lang has a C/Rust‑inspired surface syntax. Core features work end‑to‑end (tokenize → parse → codegen → compile → run).
+Deep‑dive docs for core modules and backends:
 
-Test status: 38 passed, 0 failed (via `cargo test -q`). Tests exercise both LLVM and C backends for each case.
+> __Syntax Parsing__
+1. [Tokenizer Module](docs/tokenizer.md)
+2. [AST Parser Module](docs/ast.md)
+   - [Expressions](docs/expression.md)
+   - [Statements](docs/statement.md)
+   - [Blocks](docs/block.md)
+   - [Variables](docs/variable.md)
+   - [Types](docs/types.md)
+
+> __Compilation__
+- [LLVM IR Backend Module](docs/backend_llvm.md)
+- [Compile-to-C Backend Module](docs/backend_c.md)
 
 ## Backends
 
