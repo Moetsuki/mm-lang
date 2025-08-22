@@ -12,11 +12,11 @@ use crate::types::Type;
 use crate::variable::Variable;
 use std::collections::HashMap;
 
-pub struct TargetC<'a> {
-    ast: Ast<'a>,
-    _source: &'a SourceFile,
+pub struct TargetC {
+    ast: Ast,
     headers: String,
     decls: String,
+    source: SourceFile,
     functions: Vec<String>,
     main_body: Vec<String>,
     temp_id: usize,
@@ -38,13 +38,13 @@ struct ClassInfo {
     methods: Vec<MethodSig>,
 }
 
-impl<'a> TargetC<'a> {
-    pub fn new(ast: Ast<'a>, source: &'a SourceFile) -> Self {
+impl TargetC {
+    pub fn new(ast: Ast, source: SourceFile) -> Self {
         Self {
             ast,
-            _source: source,
             headers: String::new(),
             decls: String::new(),
+            source,
             functions: Vec::new(),
             main_body: Vec::new(),
             temp_id: 0,
@@ -446,6 +446,9 @@ impl<'a> TargetC<'a> {
                 }
                 out.push("}".into());
             }
+            Statement::Use { .. } => {
+                // Do nothing, we use these statements in earlier compiler passes
+            }
         }
         out
     }
@@ -578,7 +581,7 @@ impl<'a> TargetC<'a> {
             } => {
                 // Debug aid: mirror LLVM's caret diagnostics to validate parser spans
                 println!(">>> TargetC::Expression::MethodCall");
-                self._source.caret(*span);
+                self.source.caret(*span);
 
                 let (mut code, obj_expr) = self.transform_expression(object);
                 let mut arg_exprs: Vec<String> = Vec::new();
@@ -651,7 +654,7 @@ impl<'a> TargetC<'a> {
     }
 }
 
-impl<'a> Backend<'a> for TargetC<'a> {
+impl Backend for TargetC {
     fn compile(&mut self) {
         self.headers
             .push_str("#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n\n");
@@ -697,7 +700,7 @@ impl<'a> Backend<'a> for TargetC<'a> {
         self.code.clone()
     }
 
-    fn from_ast(ast: Ast<'a>, source: &'a SourceFile) -> Self {
+    fn from_ast(ast: Ast, source: SourceFile) -> Self {
         Self::new(ast, source)
     }
 }

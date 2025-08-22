@@ -6,7 +6,7 @@ use crate::ast::Ast;
 use crate::file::SourceFile;
 
 /// Minimal backend interface used by the driver.
-pub trait Backend<'a> {
+pub trait Backend {
     /// Lower the parsed AST into target code.
     fn compile(&mut self);
 
@@ -14,7 +14,7 @@ pub trait Backend<'a> {
     fn output(&self) -> String;
 
     /// Construct a backend instance from AST and source file.
-    fn from_ast(ast: Ast<'a>, source: &'a SourceFile) -> Self
+    fn from_ast(ast: Ast, source: SourceFile) -> Self
     where
         Self: Sized;
 }

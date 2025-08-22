@@ -7,7 +7,7 @@ pub struct FileId(pub u64);
 
 static FILE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceFile {
     pub id: FileId,
     pub name: String,
@@ -96,5 +96,14 @@ impl SourceFile {
         );
         println!("{}", res);
         res
+    }
+    
+    pub fn hash(&self) -> u64 {
+        let mut hash : u64 = 0xdeadbeef;
+        for byte in self.src.bytes() {
+            hash = hash.wrapping_mul(0x4F6E9C5).wrapping_add(byte as u64);
+            hash ^= hash >> 23;
+        }
+        hash.wrapping_mul(0x85EBCA77)
     }
 }

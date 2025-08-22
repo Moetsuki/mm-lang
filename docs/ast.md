@@ -11,12 +11,11 @@ The AST (Abstract Syntax Tree) parser module (`ast.rs`) is responsible for conve
 ### Ast Structure
 
 ```rust
-pub struct Ast<'a> {
+pub struct Ast {
     tokens: Vec<LexicalToken>,
     pos: usize,
     tree: Option<Block>,
-    source_file: &'a SourceFile,
-    // Track known type names to disambiguate constructs during parsing
+    source_file: SourceFile,
     class_names: HashSet<String>,
     struct_names: HashSet<String>,
 }

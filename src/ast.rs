@@ -12,25 +12,26 @@ use crate::variable::Variable;
 use std::collections::HashSet;
 use std::str::FromStr;
 
-pub struct Ast<'a> {
+pub struct Ast {
     tokens: Vec<LexicalToken>,
     pos: usize,
     tree: Option<Block>,
-    source_file: &'a SourceFile,
-    // Track known type names to disambiguate constructs during parsing
+    source: SourceFile,
     class_names: HashSet<String>,
     struct_names: HashSet<String>,
+    current_token_span: Option<Span>,
 }
 
-impl<'a> Ast<'a> {
-    pub fn new(tokens: Vec<LexicalToken>, source_file: &'a SourceFile) -> Self {
+impl Ast {
+    pub fn new(tokens: Vec<LexicalToken>, source: SourceFile) -> Self {
         Ast {
             tokens,
             pos: 0,
             tree: None,
-            source_file,
+            source,
             class_names: HashSet::new(),
             struct_names: HashSet::new(),
+            current_token_span: None,
         }
     }
 
@@ -89,8 +90,14 @@ impl<'a> Ast<'a> {
     pub fn parse(&mut self) -> Block {
         let mut statements = Vec::new();
 
-        while let Some(lexical_token) = self.next_token() {
+        while self.pos < self.tokens.len() {
+            // Take ownership of current token by cloning; advance position manually to avoid simultaneous borrows.
+            let lexical_token = self.tokens[self.pos].clone();
+            self.pos += 1;
             let lexical_token_span = lexical_token.span;
+
+            self.set_current_token_span(lexical_token_span);
+
             match &lexical_token.token {
                 //
                 // Handle Identifiers:
@@ -128,10 +135,14 @@ impl<'a> Ast<'a> {
                                             self.next_token(); // consume the type identifiers
                                             self.expect_operator(); // consume the = sign
                                             let expr = self.parse_expr();
+
+                                            let mut span = lexical_token_span.join(expr.span());
+
                                             statements.push(Statement::VariableDecl {
                                                 identifier: var_info,
+                                                visibility: Visibility::Default,
                                                 value: expr.clone(),
-                                                span: lexical_token_span.join(expr.span()),
+                                                span,
                                             });
                                         }
                                         Token::Keyword(key) if key == "tensor" => {
@@ -147,10 +158,14 @@ impl<'a> Ast<'a> {
                                             };
                                             self.expect_operator(); // consume the = sign
                                             let expr = self.parse_expr();
+
+                                            let mut span = lexical_token_span.join(expr.span());
+
                                             statements.push(Statement::VariableDecl {
                                                 identifier: var_info,
+                                                visibility: Visibility::Default,
                                                 value: expr.clone(),
-                                                span: lexical_token_span.join(expr.span()),
+                                                span,
                                             })
                                         }
                                         _ => {
@@ -373,8 +388,33 @@ impl<'a> Ast<'a> {
                     });
                 }
                 Token::Keyword(keyword) if keyword == "function" => {
+                    let (visibility, vis_span) = self.parse_visibility(1);
+
                     let mut stm = self.parse_function();
-                    let sp = stm.span().join(lexical_token_span);
+
+                    let mut sp = stm.span().join(lexical_token_span);
+
+                    if let Statement::Function {
+                        name,
+                        ret_type,
+                        params,
+                        body,
+                        span,
+                        ..
+                    } = stm
+                    {
+                        stm = Statement::Function {
+                            name,
+                            visibility,
+                            ret_type,
+                            params,
+                            body,
+                            span,
+                        };
+                    }
+
+                    sp.join(vis_span);
+
                     *stm.span_mut() = sp;
                     statements.push(stm);
                 }
@@ -391,6 +431,15 @@ impl<'a> Ast<'a> {
                 Token::Keyword(keyword) if keyword == "class" => {
                     //
                     // Handle class definitions
+                    //
+
+                    //
+                    // Get class visibility and visibility keyword span
+                    //
+                    let (visibility, vis_span) = self.parse_visibility(1);
+
+                    //
+                    // Get the class name
                     //
                     let class_name = if let Some(lexical_token) = self.next_token() {
                         if let Token::Identifier(name) = &lexical_token.token {
@@ -519,6 +568,33 @@ impl<'a> Ast<'a> {
                                 // Ignore newlines
                                 self.next_token(); // consume the newline
                             }
+                            // Support default-visibility fields like `a: i32;` inside class bodies.
+                            Token::Identifier(field_name) => {
+                                // Look ahead one more token to ensure this is a field (identifier followed by ':').
+                                let is_field = if let Some(next_tok) = self.tokens.get(self.pos + 1)
+                                {
+                                    matches!(&next_tok.token, Token::Punctuation(p) if p == ":")
+                                } else {
+                                    false
+                                };
+                                if !is_field {
+                                    break;
+                                }
+
+                                let field_name = field_name.clone();
+                                self.next_token(); // consume identifier
+                                self.expect(&Token::Punctuation(":".to_string()));
+                                let field_type = self.parse_type();
+                                fields.push((
+                                    Variable {
+                                        name: field_name,
+                                        var_type: field_type,
+                                    },
+                                    Visibility::Default,
+                                ));
+                                // Expect semicolon after field; allow it, else panic for now (could be improved)
+                                self.expect(&Token::Punctuation(";".to_string()));
+                            }
                             _ => {
                                 // Any other keyword other than a visibility keyword means we are done with the class definition
                                 break;
@@ -533,6 +609,7 @@ impl<'a> Ast<'a> {
                             (
                                 Box::new(Statement::Function {
                                     name: format!("__{}_init", class_name),
+                                    visibility: Visibility::Public,
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
@@ -550,6 +627,7 @@ impl<'a> Ast<'a> {
                             (
                                 Box::new(Statement::Function {
                                     name: format!("__{}_destroy", class_name),
+                                    visibility: Visibility::Public,
                                     ret_type: Type::Void,
                                     params: Vec::new(),
                                     body: Block::new(Vec::new()),
@@ -562,7 +640,7 @@ impl<'a> Ast<'a> {
 
                     self.expect(&Token::Punctuation("}".to_string())); // consume the closing brace
 
-                    let total_span = {
+                    let mut total_span = {
                         if let Some(peek_tok) = self.peek_token() {
                             peek_tok.span.join(lexical_token_span)
                         } else {
@@ -570,8 +648,11 @@ impl<'a> Ast<'a> {
                         }
                     };
 
+                    total_span.join(vis_span);
+
                     statements.push(Statement::Class {
                         name: class_name,
+                        visibility,
                         parent: parent_class,
                         fields,
                         methods,
@@ -581,6 +662,8 @@ impl<'a> Ast<'a> {
                     self.expect(&Token::Punctuation(";".to_string())); // consume the semicolon
                 }
                 Token::Keyword(keyword) if keyword == "struct" => {
+                    let (visibility, vis_span) = self.parse_visibility(1);
+
                     // Parse a simple struct definition: struct Name { field: type; ... };
                     let struct_name = if let Some(tok) = self.next_token() {
                         if let Token::Identifier(name) = &tok.token {
@@ -662,7 +745,7 @@ impl<'a> Ast<'a> {
                         }
                     }
 
-                    let total_span = {
+                    let mut total_span = {
                         if let Some(peek_tok) = self.peek_token() {
                             peek_tok.span.join(lexical_token_span)
                         } else {
@@ -670,9 +753,12 @@ impl<'a> Ast<'a> {
                         }
                     };
 
+                    total_span.join(vis_span);
+
                     statements.push(Statement::Struct {
                         id: 0,
                         name: struct_name,
+                        visibility,
                         parent: None,
                         fields,
                         span: total_span,
@@ -710,6 +796,13 @@ impl<'a> Ast<'a> {
                         body: block.clone(),
                         span: block.span().unwrap_or(lexical_token_span),
                     });
+                }
+                Token::Keyword(key)
+                    if key == "public" || key == "private" || key == "protected" =>
+                {
+                    //
+                    // Ignore visibility keywords we back-search for them when necessary
+                    //
                 }
                 _ => {
                     //
@@ -1333,6 +1426,7 @@ impl<'a> Ast<'a> {
 
         Statement::Function {
             name,
+            visibility: Visibility::Default,
             ret_type,
             params,
             body,
@@ -1392,6 +1486,7 @@ impl<'a> Ast<'a> {
 
         Statement::Function {
             name,
+            visibility: Visibility::Default,
             ret_type: Type::Void, // Constructors and destructors do not return a value
             params,
             body,
@@ -1425,5 +1520,49 @@ impl<'a> Ast<'a> {
             }
         }
         params
+    }
+
+    fn set_current_token_span(&mut self, span: Span) {
+        self.current_token_span = Some(span);
+    }
+
+    fn parse_visibility(&mut self, back_steps: usize) -> (Visibility, Span) {
+        let mut visibility = Visibility::Default;
+        let mut span = self.current_token_span.unwrap();
+
+        //
+        // Ideally when we're at a struct, class or function definition
+        //
+        // example: public struct Point,
+        //
+        // the current token is at `struct` so we need to backtrack twice to reach
+        // visibility identifier
+        //
+        // whereas for variable declarations we need to backtrack once
+        //
+
+        for _ in 0..back_steps+1 {
+            self.backtrack();
+        }
+
+        if let Some(token) = self.next_token() {
+            match &token.token {
+                Token::Keyword(key)
+                    if key == "public" || key == "private" || key == "protected" =>
+                {
+                    visibility = key.into();
+                    span = token.span;
+                }
+                _ => {
+                    // println!("parse_visibility {:?}", token);
+                }
+            }
+        }
+
+        for _ in 0..back_steps {
+            self.next_token();
+        }
+        
+        (visibility, span)
     }
 }

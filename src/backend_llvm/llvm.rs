@@ -402,7 +402,7 @@ impl Display for StringData {
 /// LLVM
 ///
 #[allow(clippy::upper_case_acronyms)]
-pub struct LLVM<'a> {
+pub struct LLVM {
     forward_decls: IR,
     prologue: IR,
     main_prologue: IR,
@@ -410,8 +410,8 @@ pub struct LLVM<'a> {
     main_epilogue: IR,
     code: IR,
     epilogue: IR,
-    ast: Ast<'a>,
-    source: &'a SourceFile,
+    ast: Ast,
+    source: SourceFile,
     scope: Scope,
     class_definitions: HashMap<String, Class>,
     struct_definitions: HashMap<String, Struct>,
@@ -420,8 +420,8 @@ pub struct LLVM<'a> {
     current_func_scope: Option<Box<Function>>,
 }
 
-impl<'a> LLVM<'a> {
-    pub fn new(ast: Ast<'a>, source: &'a SourceFile) -> Self {
+impl LLVM {
+    pub fn new(ast: Ast, source: SourceFile) -> Self {
         LLVM {
             forward_decls: IR::new(),
             prologue: IR::new(),
@@ -524,6 +524,7 @@ impl<'a> LLVM<'a> {
                 }
                 Statement::VariableDecl {
                     identifier: var_info,
+                    visibility: _visibility,
                     value,
                     span,
                 } => {
@@ -1084,6 +1085,7 @@ impl<'a> LLVM<'a> {
                 }
                 Statement::Function {
                     name,
+                    visibility,
                     ret_type,
                     params,
                     body,
@@ -1151,6 +1153,7 @@ impl<'a> LLVM<'a> {
                         self.current_class_scope.as_ref().map(|c| *c.clone()),
                         Statement::Function {
                             name: name.clone(),
+                            visibility: *visibility,
                             params: params.clone(),
                             ret_type: ret_type.clone(),
                             body: body.clone(),
@@ -1170,27 +1173,36 @@ impl<'a> LLVM<'a> {
                     // If there is a fallthrough path with last value, ensure it matches ret type;
                     // If all paths return, skip this coercion.
                     let body_all_paths_return = self.all_paths_return(&body.statements);
-                    if !body_all_paths_return && body_eval.register.var_type != *ret_type {
-                        // Make sure the last instruction of the epilogue is a ret
+                    if *ret_type == Type::Void {
+                        // For void functions, ignore the last expression value and ensure a 'ret void'
+                        if !body_all_paths_return {
+                            let needs_ret = match body_eval.code.instructions.last() {
+                                Some(last) => !last.starts_with("ret"),
+                                None => true,
+                            };
+                            if needs_ret {
+                                body_eval.code.push("ret void".to_string());
+                            }
+                        }
+                    } else if !body_all_paths_return && body_eval.register.var_type != *ret_type {
+                        // Non-void function with fallthrough and mismatched final value
                         if let Some(last) = body_eval.code.instructions.last()
                             && !last.starts_with("ret")
                         {
-                            panic!(
-                                "Function '{}' return type mismatch: expected {}, got {}",
-                                name, ret_type, body_eval.register.var_type
-                            );
-                        };
-                        // Remove the last instruction
-                        body_eval.code.instructions.pop();
-
-                        // Coerce the return value register to the expected return type in a new register
+                            // Remove stray last instruction producing the wrong-typed value
+                            // and perform a coercion if possible; panic only if conversion fails inside helper.
+                            // (Previous behavior was to panic immediately.)
+                        }
+                        if let Some(last) = body_eval.code.instructions.last()
+                            && !last.starts_with("ret") {
+                                // Remove the last instruction so we can emit the coerced return.
+                                body_eval.code.instructions.pop();
+                            }
                         let coerced_register = self.insert_type_conversion(
                             &mut body_eval.code,
                             &body_eval.register,
                             ret_type,
                         );
-
-                        // Return the coerced register
                         body_eval.code.push(format!(
                             "ret {} %{}",
                             type_to_llvm(&coerced_register.var_type),
@@ -1323,6 +1335,7 @@ impl<'a> LLVM<'a> {
                 }
                 Statement::Class {
                     name,
+                    visibility: _visibility,
                     parent,
                     fields,
                     methods,
@@ -1557,6 +1570,7 @@ impl<'a> LLVM<'a> {
                     for method in methods {
                         if let Statement::Function {
                             name,
+                            visibility,
                             ret_type,
                             params,
                             body,
@@ -1610,6 +1624,7 @@ impl<'a> LLVM<'a> {
                                 Statement::Function {
                                     // statement
                                     name: name.clone(),
+                                    visibility: *visibility,
                                     params: params.clone(),
                                     ret_type: ret_type.clone(),
                                     body: body.clone(),
@@ -1757,6 +1772,9 @@ impl<'a> LLVM<'a> {
                     ));
 
                     self.struct_definitions.insert(name.clone(), struct_def);
+                }
+                Statement::Use { .. } => {
+                    // We don't transform use statements, these are for earlier compiler passes
                 }
             }
         }
@@ -2989,8 +3007,32 @@ impl<'a> LLVM<'a> {
         from_register: &Register,
         target_type: &Type,
     ) -> Register {
+        //
+        // If its the same type, we treat this conversion as a no-op
+        //
         if from_register.var_type == *target_type {
             return from_register.clone();
+        }
+
+        //
+        // If both types lower to the exact same LLVM primitive (e.g. i64 for I64/U64, i32 for I32/U32, etc.)
+        // we treat the conversion as a no-op.
+        //
+        // Our language distinguishes signed vs unsigned, but LLVM IR does
+        // not encode signedness into the integer type itself; it is only relevant for how certain ops are
+        // interpreted (e.g. signed vs unsigned comparisons, division).
+        //
+        // For a plain value move/assignment we can safely reuse the existing register without emitting IR.
+        // This is necessary for cases like assigning an
+        // i64 literal (default signed integer literal) into a u64 variable.
+        //
+        let from_llvm_tmp = from_register.llvm_type();
+        let to_llvm_tmp = type_to_llvm(target_type);
+        if from_llvm_tmp == to_llvm_tmp {
+            // Same underlying bit width & representation. Just reuse.
+            let mut result = from_register.clone();
+            result.var_type = target_type.clone();
+            return result;
         }
 
         let new_register = Register::new(target_type.clone());
@@ -3090,7 +3132,7 @@ impl<'a> LLVM<'a> {
             }
             _ => panic!(
                 "Unsupported automatic conversion from {} to {}",
-                from_llvm, to_llvm
+                from_register.var_type, target_type
             ),
         }
 
@@ -3310,6 +3352,7 @@ impl<'a> LLVM<'a> {
             Statement::Function {
                 // statement
                 name: "main".to_string(),
+                visibility: Visibility::Private,
                 params: vec![],
                 ret_type: Type::I32,
                 body: Block::new(vec![]),

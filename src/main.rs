@@ -8,6 +8,7 @@ mod backtrace;
 mod block;
 mod expression;
 mod file;
+mod module;
 mod span;
 mod statement;
 mod tokenizer;
@@ -149,21 +150,21 @@ fn process_impl(
     //     println!("{:?}", token);
     // }
 
-    let mut ast = Ast::new(tokens, &source_file);
+    let mut ast = Ast::new(tokens, source_file.clone());
 
     let _block = ast.parse();
 
-    //print_block(&_block, 0);
+    print_block(&_block, 0);
 
     // Instantiate backend
     let ir_output = match kind {
         TargetKind::LLVM => {
-            let mut backend = target_llvm::TargetLLVM::from_ast(ast, &source_file);
+            let mut backend = target_llvm::TargetLLVM::from_ast(ast, source_file);
             backend.compile();
             backend.output()
         }
         TargetKind::C => {
-            let mut backend = target_c::TargetC::from_ast(ast, &source_file);
+            let mut backend = target_c::TargetC::from_ast(ast, source_file);
             backend.compile();
             backend.output()
         }
@@ -997,4 +998,42 @@ fn test_struct_partial_literal_unused_field() {
     return d.x;
     "#;
     process(source, None, Some(42), false);
+}
+
+#[test]
+fn test_simple_module() {
+    let _module_foo = r#"
+    public function bar() -> i32 {
+        printf("foo::bar() called");
+        return 5;
+    }
+    "#;
+
+    let _source = r#"
+    use foo::bar;
+
+    return bar();
+    "#;
+}
+
+#[test]
+fn test_visibility() {
+    let source = r#"
+    public function foo() {
+        printf("foo()");
+    }
+
+    public class Point {
+        a: i32;
+        b: i32;
+    };
+
+    public struct Vector {
+        x: i32;
+        y: i32;
+    };
+
+    private baz : u64 = 100;
+    "#;
+    process(source, None, None, false);
 }

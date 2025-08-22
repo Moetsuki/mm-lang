@@ -2,14 +2,14 @@ use std::fmt::Display;
 
 use crate::{file::SourceFile, span::Span};
 
-pub const PUNCTUATION: [&str; 11] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->"];
+pub const PUNCTUATION: [&str; 12] = ["(", ")", "{", "}", "[", "]", ";", ",", ".", ":", "->", "::"];
 
 pub const OPERATORS: [&str; 17] = [
     "+", "-", "*", "/", "%", "=", "==", "!=", "<", ">", "<=", ">=", // Logical operators
     "!", "&", "|", "&&", "||",
 ];
 
-pub const KEYWORDS: [&str; 23] = [
+pub const KEYWORDS: [&str; 25] = [
     "if",
     "else",
     "while",
@@ -33,6 +33,8 @@ pub const KEYWORDS: [&str; 23] = [
     "tensor",
     "true",
     "false",
+    "use",
+    "include"
 ];
 
 #[derive(Debug, Clone)]
