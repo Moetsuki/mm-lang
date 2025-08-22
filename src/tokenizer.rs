@@ -34,7 +34,7 @@ pub const KEYWORDS: [&str; 25] = [
     "true",
     "false",
     "use",
-    "include"
+    "include",
 ];
 
 #[derive(Debug, Clone)]
@@ -216,10 +216,15 @@ pub fn tokenize_line(
                     // so we skip the rest of the line
                     token.clear();
                     token_start = None;
-
-                    // Advance cursor and column to the end of the kine so spans stay correct
-                    let remaining = *cursor - line_start_cursor - 1;
-                    *cursor += remaining;
+                    // Advance global cursor to the end of this line (exclude the implicit '\n').
+                    let processed = *cursor - line_start_cursor; // bytes already consumed in this line
+                    let line_len = line_string.len(); // total bytes in this line (no trailing '\n')
+                    if processed < line_len {
+                        let remaining = line_len - processed;
+                        *cursor += remaining; // jump to physical end-of-line
+                    }
+                    // Set column to visual width (= char count) so subsequent emitted newline token
+                    // records a sensible column number.
                     column = line_string.chars().count();
 
                     break;

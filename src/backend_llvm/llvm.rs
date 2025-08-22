@@ -418,6 +418,7 @@ pub struct LLVM {
     current_class_scope: Option<Box<Class>>,
     current_struct_scope: Option<Box<Struct>>,
     current_func_scope: Option<Box<Function>>,
+    verbose: bool,
 }
 
 impl LLVM {
@@ -438,6 +439,7 @@ impl LLVM {
             current_class_scope: None,
             current_struct_scope: None,
             current_func_scope: None,
+            verbose: true,
         }
     }
 
@@ -456,7 +458,9 @@ impl LLVM {
     }
 
     #[track_caller]
-    pub fn compile(&mut self) {
+    pub fn compile(&mut self, verbose: bool) {
+        self.verbose = verbose;
+
         self.prologue.push("\n; PROLOGUE".to_string());
         self.prologue
             .push("; LLVM IR generated from MM-lang\n".to_string());
@@ -536,8 +540,10 @@ impl LLVM {
                         Expression::InitializerList { elements, .. },
                     ) = (&var_info.var_type, value)
                     {
-                        println!("### Statement::VariableDecl (tensor)");
-                        self.source.caret(*span);
+                        if self.verbose {
+                            println!("### Statement::VariableDecl (tensor)");
+                            self.source.caret(*span);
+                        }
 
                         // Allocate a contiguous buffer: alloca <elem>, i64 <len>
                         let elem_llvm = type_to_llvm(elem_ty);
@@ -606,8 +612,10 @@ impl LLVM {
                     // println!("{{Statement::VariableDecl}}\n");
                     // println!("{:?}", statement.clone());
 
-                    println!("### Statement::VariableDecl");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::VariableDecl");
+                        self.source.caret(*span);
+                    }
 
                     // println!("  + [Identifier]");
                     // println!("      | [var_info]");
@@ -675,8 +683,10 @@ impl LLVM {
                     span,
                 } => match lhs {
                     Expression::Variable { var: var_info, .. } => {
-                        println!("### Statement::Assignment");
-                        self.source.caret(*span);
+                        if self.verbose {
+                            println!("### Statement::Assignment");
+                            self.source.caret(*span);
+                        }
 
                         let rhs_eval = self.transform_expression(rhs.clone());
                         eval.code
@@ -726,8 +736,10 @@ impl LLVM {
                         }
                     }
                     Expression::ArrayAccess { array, index, .. } => {
-                        println!("### Statement::Assignment (array element)");
-                        self.source.caret(*span);
+                        if self.verbose {
+                            println!("### Statement::Assignment (array element)");
+                            self.source.caret(*span);
+                        }
 
                         // Evaluate base array expression (should produce a pointer to element type)
                         let arr_eval = self.transform_expression(*array.clone());
@@ -791,8 +803,10 @@ impl LLVM {
                     Expression::FieldAccess {
                         object: lhs, field, ..
                     } => {
-                        println!("### Statement::Assignment");
-                        self.source.caret(*span);
+                        if self.verbose {
+                            println!("### Statement::Assignment");
+                            self.source.caret(*span);
+                        }
 
                         let object_eval = self.transform_expression(*lhs.clone());
 
@@ -917,8 +931,10 @@ impl LLVM {
                     // done                                                         //
                     // ------------------------------------------------------------ //
 
-                    println!("### Statement::If");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::If");
+                        self.source.caret(*span);
+                    }
 
                     // Path return analysis
                     //
@@ -944,8 +960,6 @@ impl LLVM {
                             .is_none_or(|b| self.all_paths_return(&b.statements))
                         && else_block.is_some();
 
-                    println!("all_paths_return: {}", omit_done_label);
-
                     // Create labels
                     let true_label = format!("if_true_{}", eval.register.id);
                     let false_label = format!("if_false_{}", eval.register.id);
@@ -955,8 +969,6 @@ impl LLVM {
                         .enumerate()
                         .map(|(i, _)| format!("if_elif_{}_{}", i, eval.register.id))
                         .collect();
-
-                    println!("elif_labels: {:?}", elif_labels);
 
                     // ---------------------//
                     // Generate fallthru br //
@@ -1091,8 +1103,10 @@ impl LLVM {
                     body,
                     span,
                 } => {
-                    println!("### Statement::Function");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::Function");
+                        self.source.caret(*span);
+                    }
 
                     // Get LLVM types
                     let return_type_llvm = type_to_llvm(&ret_type.clone());
@@ -1194,10 +1208,11 @@ impl LLVM {
                             // (Previous behavior was to panic immediately.)
                         }
                         if let Some(last) = body_eval.code.instructions.last()
-                            && !last.starts_with("ret") {
-                                // Remove the last instruction so we can emit the coerced return.
-                                body_eval.code.instructions.pop();
-                            }
+                            && !last.starts_with("ret")
+                        {
+                            // Remove the last instruction so we can emit the coerced return.
+                            body_eval.code.instructions.pop();
+                        }
                         let coerced_register = self.insert_type_conversion(
                             &mut body_eval.code,
                             &body_eval.register,
@@ -1218,8 +1233,10 @@ impl LLVM {
                     // No need to re-register function in global scope here; already inserted before body
                 }
                 Statement::Call { callee, args, span } => {
-                    println!("### Statement::Call");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::Call");
+                        self.source.caret(*span);
+                    }
 
                     match callee {
                         Expression::Variable { var: var_expr, .. } => {
@@ -1296,8 +1313,10 @@ impl LLVM {
                     }
                 }
                 Statement::Return { value, span } => {
-                    println!("### Statement::Return");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::Return");
+                        self.source.caret(*span);
+                    }
 
                     let return_eval = self.transform_expression(value.clone());
                     eval.code.instructions.extend(return_eval.code.instructions);
@@ -1344,8 +1363,10 @@ impl LLVM {
                     //
                     // Handle class transformation
                     //
-                    println!("### Statement::Class");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::Class");
+                        self.source.caret(*span);
+                    }
 
                     //
                     // NOTES:
@@ -1738,8 +1759,10 @@ impl LLVM {
                     name, fields, span, ..
                 } => {
                     // Handle struct type definition similar to classes but without vtable/methods
-                    println!("### Statement::Struct");
-                    self.source.caret(*span);
+                    if self.verbose {
+                        println!("### Statement::Struct");
+                        self.source.caret(*span);
+                    }
 
                     if self.struct_definitions.contains_key(name) {
                         panic!("Struct '{}' already defined", name);
@@ -1819,8 +1842,10 @@ impl LLVM {
                 eval.register.var_type = Type::Bool;
             }
             Expression::ArrayAccess { array, index, span } => {
-                println!(">>> Expression::ArrayAccess");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::ArrayAccess");
+                    self.source.caret(span);
+                }
 
                 // Evaluate array expression and index
                 let arr_eval = self.transform_expression(*array);
@@ -1894,8 +1919,10 @@ impl LLVM {
                 right,
                 span,
             } => {
-                println!(">>> Expression::BinaryOp");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::BinaryOp");
+                    self.source.caret(span);
+                }
 
                 // Short-circuit logical operators
                 if op == "&&" || op == "||" {
@@ -2206,8 +2233,10 @@ impl LLVM {
                 let inner_eval = self.transform_expression(*expr);
                 eval.code.instructions.extend(inner_eval.code.instructions);
 
-                println!(">>> Expression::UnaryOp");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::UnaryOp");
+                    self.source.caret(span);
+                }
 
                 match op.as_str() {
                     "-" => {
@@ -2259,8 +2288,10 @@ impl LLVM {
                 target_type,
                 span,
             } => {
-                println!(">>> Expression::Cast");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::Cast");
+                    self.source.caret(span);
+                }
 
                 let inner_eval = self.transform_expression(*expr);
                 eval.code.instructions.extend(inner_eval.code.instructions);
@@ -2342,8 +2373,10 @@ impl LLVM {
                 args: _args,
                 span,
             } => {
-                println!(">>> Expression::MethodCall");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::MethodCall");
+                    self.source.caret(span);
+                }
 
                 // println!(
                 //     "{}\n{}\n{}\n{}\n{}\n{}\n{}",
@@ -2590,8 +2623,10 @@ impl LLVM {
                 ));
             }
             Expression::StructLiteral { name, fields, span } => {
-                println!(">>> Expression::StructLiteral");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::StructLiteral");
+                    self.source.caret(span);
+                }
 
                 // Lookup struct definition
                 let struct_def = self
@@ -2669,8 +2704,10 @@ impl LLVM {
                 field,
                 span,
             } => {
-                println!(">>> Expression::FieldAccess");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::FieldAccess");
+                    self.source.caret(span);
+                }
 
                 // Evaluate the base object (e.g., `self` or `this`)
                 let object_eval = match &*object {
@@ -2803,8 +2840,10 @@ impl LLVM {
                 }
             }
             Expression::Call { callee, args, span } => {
-                println!(">>> Expression::Call");
-                self.source.caret(span);
+                if self.verbose {
+                    println!(">>> Expression::Call");
+                    self.source.caret(span);
+                }
 
                 match *callee {
                     Expression::Variable { var, .. } => {

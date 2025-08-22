@@ -154,24 +154,25 @@ fn process_impl(
 
     let _block = ast.parse();
 
-    print_block(&_block, 0);
+    //print_block(&_block, 0);
 
     // Instantiate backend
     let ir_output = match kind {
         TargetKind::LLVM => {
             let mut backend = target_llvm::TargetLLVM::from_ast(ast, source_file);
-            backend.compile();
+            backend.compile(false);
             backend.output()
         }
         TargetKind::C => {
             let mut backend = target_c::TargetC::from_ast(ast, source_file);
-            backend.compile();
+            backend.compile(false);
             backend.output()
         }
     };
-    for (i, line) in ir_output.lines().enumerate() {
-        println!("{:>3}: {}", i, line);
-    }
+
+    //for (i, line) in ir_output.lines().enumerate() {
+    //    println!("{:>3}: {}", i, line);
+    //}
 
     if print_asm && matches!(kind, TargetKind::LLVM) {
         // Compile LLVM IR via stdin

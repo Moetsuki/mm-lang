@@ -8,7 +8,7 @@ use crate::file::SourceFile;
 /// Minimal backend interface used by the driver.
 pub trait Backend {
     /// Lower the parsed AST into target code.
-    fn compile(&mut self);
+    fn compile(&mut self, verbose: bool);
 
     /// Get the produced textual output for this backend.
     fn output(&self) -> String;

@@ -22,6 +22,7 @@ pub struct TargetC {
     temp_id: usize,
     code: String,
     classes: HashMap<String, ClassInfo>,
+    verbose: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +51,7 @@ impl TargetC {
             temp_id: 0,
             code: String::new(),
             classes: HashMap::new(),
+            verbose: true,
         }
     }
 
@@ -655,7 +657,9 @@ impl TargetC {
 }
 
 impl Backend for TargetC {
-    fn compile(&mut self) {
+    fn compile(&mut self, verbose: bool) {
+        self.verbose = verbose;
+
         self.headers
             .push_str("#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n\n");
 

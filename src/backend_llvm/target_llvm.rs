@@ -17,8 +17,8 @@ impl TargetLLVM {
 }
 
 impl Backend for TargetLLVM {
-    fn compile(&mut self) {
-        self.inner.compile();
+    fn compile(&mut self, verbose: bool) {
+        self.inner.compile(verbose);
     }
 
     fn output(&self) -> String {
